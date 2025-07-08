@@ -1,6 +1,8 @@
 import os
 import faiss  # type: ignore
 from typing import Optional, List, cast
+from dataclasses import dataclass
+from markdown_it import MarkdownIt
 from llama_index.core import (
     VectorStoreIndex,
     SimpleDirectoryReader,
@@ -9,6 +11,7 @@ from llama_index.core import (
     load_index_from_storage,
     Document,
 )
+from llama_index.core.schema import TextNode
 from llama_index.vector_stores.faiss import FaissVectorStore
 from llama_index.llms.ollama import Ollama
 from llama_index.embeddings.ollama import OllamaEmbedding
@@ -20,6 +23,14 @@ from llama_index.embeddings.ollama import OllamaEmbedding
 DEFAULT_PERSIST_DIR = "./storage"
 DEFAULT_DATA_DIR = "./data"
 DEFAULT_EMBEDDING_DIM = 768  # nomic-embed-textの次元数
+
+
+@dataclass
+class MarkdownSection:
+    """Markdownセクションを表すデータクラス"""
+    header: str
+    content: str
+    level: int  # ヘッダーレベル (h1=1, h2=2, etc.)
 
 
 class RAGSystem:
@@ -43,6 +54,7 @@ class RAGSystem:
         self.data_dir = data_dir
         self.embedding_dim = embedding_dim
         self.faiss_index_path = os.path.join(persist_dir, "faiss_index.bin")
+        self.md_parser = MarkdownIt()
 
         # LLMの設定
         self.llm = Ollama(
@@ -58,6 +70,80 @@ class RAGSystem:
 
         # インデックスの初期化
         self.index = self._initialize_index()
+
+    def _parse_markdown(self, content: str) -> List[MarkdownSection]:
+        """Markdownコンテンツをパースしてセクションに分割する"""
+        tokens = self.md_parser.parse(content)
+        sections: List[MarkdownSection] = []
+        current_header = ""
+        current_level = 0
+        current_content: List[str] = []
+        in_header = False
+
+        for token in tokens:
+            if token.type == "heading_open":
+                # 新しいセクションの開始
+                if current_header and current_content:
+                    sections.append(MarkdownSection(
+                        header=current_header,
+                        content="\n".join(current_content).strip(),
+                        level=current_level
+                    ))
+                current_level = int(token.tag[1])  # h1 -> 1, h2 -> 2, etc.
+                current_content = []
+                in_header = True
+            elif token.type == "heading_close":
+                in_header = False
+            elif token.type == "inline":
+                if in_header:
+                    current_header = token.content
+                else:
+                    current_content.append(token.content)
+
+        # 最後のセクションを追加
+        if current_header and current_content:
+            sections.append(MarkdownSection(
+                header=current_header,
+                content="\n".join(current_content).strip(),
+                level=current_level
+            ))
+
+        return sections
+
+    def _create_nodes_from_sections(
+        self,
+        sections: List[MarkdownSection],
+        doc_id: str
+    ) -> List[TextNode]:
+        """セクションからノードを作成する"""
+        nodes = []
+        for i, section in enumerate(sections):
+            # ヘッダーノード
+            header_node = TextNode(
+                text=section.header,
+                metadata={
+                    "doc_id": doc_id,
+                    "section_id": i,
+                    "type": "header",
+                    "level": section.level
+                }
+            )
+
+            # コンテンツノード
+            content_node = TextNode(
+                text=section.content,
+                metadata={
+                    "doc_id": doc_id,
+                    "section_id": i,
+                    "type": "content",
+                    "header": section.header,
+                    "level": section.level
+                }
+            )
+
+            nodes.extend([header_node, content_node])
+
+        return nodes
 
     def _initialize_index(self) -> VectorStoreIndex:
         """インデックスの初期化（読み込みまたは新規作成）"""
@@ -111,9 +197,18 @@ class RAGSystem:
         return index
 
     def load_documents(self, data_dir: Optional[str] = None) -> List[Document]:
-        """ドキュメントを読み込む"""
+        """ドキュメントを読み込んでセクションに分割する"""
         target_dir = data_dir or self.data_dir
-        return SimpleDirectoryReader(target_dir).load_data()
+        documents = SimpleDirectoryReader(target_dir).load_data()
+
+        all_nodes = []
+        for doc in documents:
+            if doc.text.strip():
+                sections = self._parse_markdown(doc.text)
+                nodes = self._create_nodes_from_sections(sections, doc.doc_id)
+                all_nodes.extend(nodes)
+
+        return [Document(text=node.text, metadata=node.metadata) for node in all_nodes]
 
     def _save_index(
         self,
@@ -134,9 +229,41 @@ class RAGSystem:
 
     def query(self, query_text: str) -> str:
         """質問に対する回答を生成する"""
-        query_engine = self.index.as_query_engine(
-            system_prompt="あなたは親切なアシスタントです。与えられた文脈に基づいて、日本語で簡潔に回答してください。"
+        # クエリに対してヘッダーとコンテンツの両方の類似度を計算
+        retriever = self.index.as_retriever(
+            similarity_top_k=3  # 各タイプから上位3件を取得
         )
+
+        # ヘッダーとコンテンツの両方に対して検索を実行
+        nodes = []
+
+        # ヘッダーノードの検索
+        header_nodes = [
+            node for node in retriever.retrieve(query_text)
+            if node.metadata.get("type") == "header"
+        ]
+
+        # 関連するコンテンツノードの検索
+        content_nodes = [
+            node for node in retriever.retrieve(query_text)
+            if node.metadata.get("type") == "content"
+        ]
+
+        # ヘッダーとコンテンツを組み合わせて、レベルとスコアでソート
+        nodes = header_nodes + content_nodes
+        nodes.sort(key=lambda x: (
+            x.metadata.get("level", 999),
+            -(x.score or 0.0)  # スコアがNoneの場合は0.0を使用
+        ))
+
+        # クエリエンジンの作成と実行
+        query_engine = self.index.as_query_engine(
+            system_prompt="""あなたは親切なアシスタントです。
+与えられた文脈に基づいて、日本語で簡潔に回答してください。
+特に、ヘッダー情報を参考にして、文書の構造を意識した回答を心がけてください。
+関連するヘッダーがある場合は、その情報も含めて回答してください。"""
+        )
+
         response = query_engine.query(query_text)
         return str(response)
 
