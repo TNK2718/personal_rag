@@ -379,6 +379,8 @@ class RAGSystem:
 
         # クエリエンジンの作成と実行
         query_engine = self.index.as_query_engine(
+            streaming=True,  # ストリーミングを有効化
+            similarity_top_k=3,
             system_prompt="""あなたは親切なアシスタントです。
 与えられた文脈に基づいて、日本語で簡潔に回答してください。
 特に、ヘッダー情報を参考にして、文書の構造を意識した回答を心がけてください。
@@ -394,14 +396,34 @@ class RAGSystem:
         print("終了するには 'exit' または 'quit' と入力してください。")
 
         while True:
-            query_text = input("質問を入力してください: ")
+            query_text = input("\n質問を入力してください: ")
             if query_text.lower() in ["exit", "quit"]:
                 break
 
-            response = self.query(query_text)
             print("\n回答:")
-            print(response)
-            print("-" * 20)
+
+            # クエリエンジンの作成
+            query_engine = self.index.as_query_engine(
+                similarity_top_k=3,
+                system_prompt="""あなたは親切なアシスタントです。
+与えられた文脈に基づいて、日本語で簡潔に回答してください。
+特に、ヘッダー情報を参考にして、文書の構造を意識した回答を心がけてください。
+関連するヘッダーがある場合は、その情報も含めて回答してください。
+できるだけ短い単位で区切って回答を生成してください。"""
+            )
+
+            # 回答の生成と出力
+            response = query_engine.query(query_text)
+            response_text = str(response)
+
+            # 文字単位でストリーミング出力
+            for char in response_text:
+                print(char, end="", flush=True)
+                if char in ["。", "、", "！", "？", "\n"]:
+                    from time import sleep
+                    sleep(0.1)  # 区切り文字で少し待機
+
+            print("\n" + "-" * 20)
 
 
 def main():
