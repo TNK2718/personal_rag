@@ -1,6 +1,6 @@
 import os
 import faiss  # type: ignore
-from typing import Optional, List
+from typing import Optional, List, cast
 from llama_index.core import (
     VectorStoreIndex,
     SimpleDirectoryReader,
@@ -47,7 +47,8 @@ class RAGSystem:
         # LLMの設定
         self.llm = Ollama(
             model="hf.co/mmnga/sarashina2.2-3b-instruct-v0.1-gguf:latest",
-            request_timeout=120.0
+            request_timeout=120.0,
+            system_prompt="あなたは親切なアシスタントです。与えられた文脈に基づいて、日本語で簡潔に回答してください。"
         )
         Settings.llm = self.llm
 
@@ -86,7 +87,7 @@ class RAGSystem:
         )
         index = load_index_from_storage(storage_context)
         print("既存のインデックスを読み込みました。")
-        return index
+        return cast(VectorStoreIndex, index)
 
     def _create_new_index(self) -> VectorStoreIndex:
         """新しいインデックスを作成する"""
@@ -125,15 +126,17 @@ class RAGSystem:
 
     def add_documents(self, documents: List[Document]) -> None:
         """既存のインデックスに新しいドキュメントを追加する"""
-        self.index = self.index.from_documents(
+        self.index = cast(VectorStoreIndex, self.index.from_documents(
             documents,
             storage_context=self.index.storage_context
-        )
+        ))
         print("ドキュメントを追加しました。")
 
     def query(self, query_text: str) -> str:
         """質問に対する回答を生成する"""
-        query_engine = self.index.as_query_engine()
+        query_engine = self.index.as_query_engine(
+            system_prompt="あなたは親切なアシスタントです。与えられた文脈に基づいて、日本語で簡潔に回答してください。"
+        )
         response = query_engine.query(query_text)
         return str(response)
 
