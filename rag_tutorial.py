@@ -1,6 +1,8 @@
 import os
+import json
+import hashlib
 import faiss  # type: ignore
-from typing import Optional, List, cast
+from typing import Optional, List, Dict, cast
 from dataclasses import dataclass
 from markdown_it import MarkdownIt
 from llama_index.core import (
@@ -23,6 +25,7 @@ from llama_index.embeddings.ollama import OllamaEmbedding
 DEFAULT_PERSIST_DIR = "./storage"
 DEFAULT_DATA_DIR = "./data"
 DEFAULT_EMBEDDING_DIM = 768  # nomic-embed-textの次元数
+HASH_FILE = "document_hashes.json"
 
 
 @dataclass
@@ -54,7 +57,9 @@ class RAGSystem:
         self.data_dir = data_dir
         self.embedding_dim = embedding_dim
         self.faiss_index_path = os.path.join(persist_dir, "faiss_index.bin")
+        self.hash_file_path = os.path.join(persist_dir, HASH_FILE)
         self.md_parser = MarkdownIt()
+        self.document_hashes: Dict[str, str] = self._load_document_hashes()
 
         # LLMの設定
         self.llm = Ollama(
@@ -70,6 +75,40 @@ class RAGSystem:
 
         # インデックスの初期化
         self.index = self._initialize_index()
+
+    def _load_document_hashes(self) -> Dict[str, str]:
+        """保存されているドキュメントハッシュを読み込む"""
+        if os.path.exists(self.hash_file_path):
+            with open(self.hash_file_path, 'r', encoding='utf-8') as f:
+                return json.load(f)
+        return {}
+
+    def _save_document_hashes(self) -> None:
+        """ドキュメントハッシュを保存する"""
+        os.makedirs(self.persist_dir, exist_ok=True)
+        with open(self.hash_file_path, 'w', encoding='utf-8') as f:
+            json.dump(self.document_hashes, f, ensure_ascii=False, indent=2)
+
+    def _calculate_file_hash(self, file_path: str) -> str:
+        """ファイルのハッシュ値を計算する"""
+        with open(file_path, 'rb') as f:
+            return hashlib.md5(f.read()).hexdigest()
+
+    def _check_document_updates(self) -> List[str]:
+        """更新のあったドキュメントのパスを取得する"""
+        updated_files = []
+        for root, _, files in os.walk(self.data_dir):
+            for file in files:
+                if file.endswith('.md'):
+                    file_path = os.path.join(root, file)
+                    current_hash = self._calculate_file_hash(file_path)
+                    stored_hash = self.document_hashes.get(file_path)
+
+                    if stored_hash != current_hash:
+                        updated_files.append(file_path)
+                        self.document_hashes[file_path] = current_hash
+
+        return updated_files
 
     def _parse_markdown(self, content: str) -> List[MarkdownSection]:
         """Markdownコンテンツをパースしてセクションに分割する"""
@@ -147,13 +186,85 @@ class RAGSystem:
 
     def _initialize_index(self) -> VectorStoreIndex:
         """インデックスの初期化（読み込みまたは新規作成）"""
-        # 永続化ディレクトリの作成
         os.makedirs(self.persist_dir, exist_ok=True)
 
         try:
-            return self._load_index()
+            # 更新のあったドキュメントをチェック
+            updated_files = self._check_document_updates()
+
+            if os.path.exists(self.faiss_index_path):
+                # 既存のインデックスを読み込む
+                index = self._load_index()
+                print("既存のインデックスを読み込みました。")
+
+                # 更新があれば処理
+                if updated_files:
+                    print(f"{len(updated_files)}個のファイルが更新されています。")
+
+                    # 新しいインデックスを作成
+                    faiss_index = faiss.IndexFlatL2(self.embedding_dim)
+                    vector_store = FaissVectorStore(faiss_index=faiss_index)
+                    storage_context = StorageContext.from_defaults(
+                        vector_store=vector_store
+                    )
+
+                    # 更新されていないドキュメントを保持
+                    all_documents = []
+                    for root, _, files in os.walk(self.data_dir):
+                        for file in files:
+                            if file.endswith('.md'):
+                                file_path = os.path.join(root, file)
+                                if file_path not in updated_files:
+                                    reader = SimpleDirectoryReader(
+                                        input_files=[file_path])
+                                    docs = reader.load_data()
+                                    for doc in docs:
+                                        if doc.text.strip():
+                                            sections = self._parse_markdown(
+                                                doc.text)
+                                            nodes = self._create_nodes_from_sections(
+                                                sections, doc.doc_id)
+                                            all_documents.extend([
+                                                Document(
+                                                    text=node.text,
+                                                    metadata=node.metadata
+                                                ) for node in nodes
+                                            ])
+
+                    # 更新されたドキュメントを処理
+                    for file_path in updated_files:
+                        reader = SimpleDirectoryReader(input_files=[file_path])
+                        docs = reader.load_data()
+                        for doc in docs:
+                            if doc.text.strip():
+                                sections = self._parse_markdown(doc.text)
+                                nodes = self._create_nodes_from_sections(
+                                    sections, doc.doc_id)
+                                all_documents.extend([
+                                    Document(
+                                        text=node.text,
+                                        metadata=node.metadata
+                                    ) for node in nodes
+                                ])
+
+                    # 新しいインデックスを作成
+                    index = VectorStoreIndex.from_documents(
+                        all_documents,
+                        storage_context=storage_context
+                    )
+
+                    # インデックスを保存
+                    index.storage_context.persist(persist_dir=self.persist_dir)
+                    self._save_document_hashes()
+                    print("インデックスを更新しました。")
+
+                return index
+            else:
+                print("インデックスファイルが見つかりません。新規作成します。")
+                return self._create_new_index()
+
         except Exception as e:
-            print(f"インデックスの読み込みに失敗しました: {e}")
+            print(f"インデックスの処理中にエラーが発生しました: {e}")
             print("インデックスを新規に作成します。")
             return self._create_new_index()
 
@@ -193,6 +304,16 @@ class RAGSystem:
 
         # インデックスの永続化
         self._save_index(faiss_index, storage_context)
+
+        # ドキュメントハッシュの保存
+        for root, _, files in os.walk(self.data_dir):
+            for file in files:
+                if file.endswith('.md'):
+                    file_path = os.path.join(root, file)
+                    self.document_hashes[file_path] = self._calculate_file_hash(
+                        file_path)
+        self._save_document_hashes()
+
         print("インデックスを新規に作成し、保存しました。")
         return index
 
