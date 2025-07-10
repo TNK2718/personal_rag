@@ -117,6 +117,52 @@ python src/server/server.py
 }
 ```
 
+## テスト
+
+### テストの実行
+
+```bash
+# 全テストを実行
+make test
+
+# カバレッジ付きでテストを実行
+make test-cov
+
+# ユニットテストのみ実行
+make test-unit
+
+# APIテストのみ実行
+make test-api
+
+# テスト環境のセットアップ
+make setup
+```
+
+### テスト構成
+
+- `tests/test_rag_system.py`: RAGシステムのユニットテスト
+- `tests/test_server.py`: APIサーバーのテスト
+- `tests/test_data_classes.py`: データクラスのテスト
+- `tests/conftest.py`: テスト用の共通設定とフィクスチャ
+
+### カバレッジレポート
+
+```bash
+# カバレッジレポートを生成・表示
+make test-cov
+make docs
+```
+
+カバレッジレポートは `htmlcov/index.html` で確認できます。
+
+### テスト機能
+
+- **RAGシステム**: TODO管理、Markdown解析、文書インデックス化
+- **APIエンドポイント**: 全API機能のテスト
+- **データクラス**: TodoItem、MarkdownSectionの検証
+- **エラーハンドリング**: 例外処理とエラーレスポンス
+- **モックテスト**: 外部依存関係の分離
+
 ## 開発
 
 ### ファイル構成

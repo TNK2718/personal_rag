@@ -14,3 +14,21 @@ dependencies = [
     "markdown-it-py>=3.0.0",
     "ollama>=0.5.1",
 ]
+
+[project.optional-dependencies]
+test = [
+    "pytest>=7.0.0",
+    "pytest-mock>=3.10.0",
+    "pytest-cov>=4.0.0",
+    "requests>=2.25.0",
+]
+
+[project.scripts]
+test = "pytest"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py", "*_test.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--verbose --cov=src --cov-report=html --cov-report=term"
