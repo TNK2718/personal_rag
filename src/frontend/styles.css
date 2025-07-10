@@ -259,3 +259,312 @@ body {
     padding: 2px 4px;
     border-radius: 3px;
 }
+
+/* タブナビゲーション */
+.nav-tabs {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+    justify-content: center;
+}
+
+.nav-tab {
+    padding: 10px 20px;
+    background: #ecf0f1;
+    color: #2c3e50;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    transition: all 0.3s;
+    font-size: 16px;
+}
+
+.nav-tab:hover {
+    background: #bdc3c7;
+}
+
+.nav-tab.active {
+    background: #3498db;
+    color: white;
+}
+
+/* タブコンテンツ */
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* TODOセクション */
+.todo-section {
+    background: white;
+    padding: 25px;
+    border-radius: 10px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+    margin-bottom: 20px;
+}
+
+.todo-controls {
+    display: flex;
+    gap: 15px;
+    margin-bottom: 20px;
+    align-items: center;
+    justify-content: space-between;
+}
+
+.extract-btn {
+    background: #27ae60;
+    color: white;
+    border: none;
+    padding: 10px 20px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.3s;
+}
+
+.extract-btn:hover {
+    background: #219a52;
+}
+
+.status-filter {
+    padding: 8px 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: white;
+    font-size: 14px;
+}
+
+.add-todo-section {
+    margin-bottom: 20px;
+}
+
+.add-todo-section .input-group {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+#todoInput {
+    flex: 1;
+    padding: 12px;
+    border: 2px solid #ddd;
+    border-radius: 6px;
+    font-size: 14px;
+    transition: border-color 0.3s;
+}
+
+#todoInput:focus {
+    outline: none;
+    border-color: #3498db;
+    box-shadow: 0 0 0 3px rgba(52, 152, 219, 0.1);
+}
+
+.priority-select {
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: white;
+    font-size: 14px;
+    min-width: 60px;
+}
+
+#addTodoBtn {
+    padding: 12px 20px;
+    background: #3498db;
+    color: white;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.3s;
+}
+
+#addTodoBtn:hover {
+    background: #2980b9;
+}
+
+/* TODOリスト */
+.todo-list {
+    max-height: 600px;
+    overflow-y: auto;
+}
+
+.todo-item {
+    display: flex;
+    align-items: center;
+    padding: 15px;
+    margin-bottom: 10px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    border-left: 4px solid #ddd;
+    transition: all 0.3s;
+}
+
+.todo-item.priority-high {
+    border-left-color: #e74c3c;
+}
+
+.todo-item.priority-medium {
+    border-left-color: #f39c12;
+}
+
+.todo-item.priority-low {
+    border-left-color: #95a5a6;
+}
+
+.todo-item.status-completed {
+    background: #d5f4e6;
+    opacity: 0.7;
+}
+
+.todo-item.status-in_progress {
+    background: #fff3cd;
+}
+
+.todo-checkbox {
+    margin-right: 12px;
+    cursor: pointer;
+    transform: scale(1.2);
+}
+
+.todo-content {
+    flex: 1;
+    margin-right: 10px;
+}
+
+.todo-text {
+    font-size: 16px;
+    margin-bottom: 5px;
+    color: #2c3e50;
+}
+
+.todo-text.completed {
+    text-decoration: line-through;
+    color: #7f8c8d;
+}
+
+.todo-meta {
+    font-size: 12px;
+    color: #7f8c8d;
+}
+
+.todo-actions {
+    display: flex;
+    gap: 8px;
+}
+
+.todo-action-btn {
+    padding: 5px 10px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    transition: all 0.3s;
+}
+
+.edit-btn {
+    background: #f39c12;
+    color: white;
+}
+
+.edit-btn:hover {
+    background: #e67e22;
+}
+
+.delete-btn {
+    background: #e74c3c;
+    color: white;
+}
+
+.delete-btn:hover {
+    background: #c0392b;
+}
+
+.empty-todos {
+    text-align: center;
+    color: #7f8c8d;
+    font-style: italic;
+    padding: 40px;
+}
+
+/* ステータスバッジ */
+.status-badge {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+}
+
+.status-badge.pending {
+    background: #ecf0f1;
+    color: #2c3e50;
+}
+
+.status-badge.in_progress {
+    background: #fff3cd;
+    color: #856404;
+}
+
+.status-badge.completed {
+    background: #d5f4e6;
+    color: #155724;
+}
+
+/* 優先度バッジ */
+.priority-badge {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: bold;
+    text-transform: uppercase;
+    margin-left: 5px;
+}
+
+.priority-badge.high {
+    background: #fadbd8;
+    color: #c0392b;
+}
+
+.priority-badge.medium {
+    background: #fdeaa7;
+    color: #b7950b;
+}
+
+.priority-badge.low {
+    background: #eaeded;
+    color: #5d6d7e;
+}
+
+@media (max-width: 768px) {
+    .nav-tabs {
+        flex-direction: column;
+        align-items: center;
+    }
+    
+    .nav-tab {
+        width: 200px;
+    }
+    
+    .todo-controls {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .add-todo-section .input-group {
+        flex-direction: column;
+    }
+    
+    .todo-item {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .todo-actions {
+        margin-top: 10px;
+        justify-content: center;
+    }
+}

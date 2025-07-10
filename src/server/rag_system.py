@@ -2,8 +2,10 @@ import os
 import json
 import hashlib
 import faiss  # type: ignore
+import re
 from typing import Optional, List, Dict, cast
-from dataclasses import dataclass
+from dataclasses import dataclass, asdict
+from datetime import datetime
 from markdown_it import MarkdownIt
 from llama_index.core import (
     VectorStoreIndex,
@@ -22,6 +24,7 @@ DEFAULT_PERSIST_DIR = "./storage"
 DEFAULT_DATA_DIR = "./data"
 DEFAULT_EMBEDDING_DIM = 768  # nomic-embed-textの次元数
 HASH_FILE = "document_hashes.json"
+TODO_FILE = "todos.json"
 
 
 @dataclass
@@ -30,6 +33,25 @@ class MarkdownSection:
     header: str
     content: str
     level: int  # ヘッダーレベル (h1=1, h2=2, etc.)
+
+
+@dataclass
+class TodoItem:
+    """TODO項目を表すデータクラス"""
+    id: str
+    content: str
+    status: str  # "pending", "in_progress", "completed"
+    priority: str  # "high", "medium", "low"
+    created_at: str
+    updated_at: str
+    source_file: str
+    source_section: str
+    due_date: Optional[str] = None
+    tags: List[str] = None
+    
+    def __post_init__(self):
+        if self.tags is None:
+            self.tags = []
 
 
 class RAGSystem:
@@ -54,8 +76,10 @@ class RAGSystem:
         self.embedding_dim = embedding_dim
         self.faiss_index_path = os.path.join(persist_dir, "faiss_index.bin")
         self.hash_file_path = os.path.join(persist_dir, HASH_FILE)
+        self.todo_file_path = os.path.join(persist_dir, TODO_FILE)
         self.md_parser = MarkdownIt()
         self.document_hashes: Dict[str, str] = self._load_document_hashes()
+        self.todos: List[TodoItem] = self._load_todos()
 
         # LLMの設定
         self.llm = Ollama(
@@ -84,11 +108,75 @@ class RAGSystem:
         os.makedirs(self.persist_dir, exist_ok=True)
         with open(self.hash_file_path, 'w', encoding='utf-8') as f:
             json.dump(self.document_hashes, f, ensure_ascii=False, indent=2)
+    
+    def _load_todos(self) -> List[TodoItem]:
+        """保存されているTODOリストを読み込む"""
+        if os.path.exists(self.todo_file_path):
+            with open(self.todo_file_path, 'r', encoding='utf-8') as f:
+                todo_data = json.load(f)
+                return [TodoItem(**item) for item in todo_data]
+        return []
+    
+    def _save_todos(self) -> None:
+        """TODOリストを保存する"""
+        os.makedirs(self.persist_dir, exist_ok=True)
+        with open(self.todo_file_path, 'w', encoding='utf-8') as f:
+            todo_data = [asdict(todo) for todo in self.todos]
+            json.dump(todo_data, f, ensure_ascii=False, indent=2)
 
     def _calculate_file_hash(self, file_path: str) -> str:
         """ファイルのハッシュ値を計算する"""
         with open(file_path, 'rb') as f:
             return hashlib.md5(f.read()).hexdigest()
+    
+    def _extract_todos_from_text(self, text: str, source_file: str, source_section: str) -> List[TodoItem]:
+        """テキストからTODO項目を抽出する"""
+        todos = []
+        
+        # 様々なTODOパターンを検出
+        patterns = [
+            r'(?:TODO|Todo|todo)\s*:?\s*(.+?)(?:\n|$)',
+            r'(?:FIXME|Fixme|fixme)\s*:?\s*(.+?)(?:\n|$)',
+            r'(?:BUG|Bug|bug)\s*:?\s*(.+?)(?:\n|$)',
+            r'(?:HACK|Hack|hack)\s*:?\s*(.+?)(?:\n|$)',
+            r'(?:NOTE|Note|note)\s*:?\s*(.+?)(?:\n|$)',
+            r'(?:XXX|xxx)\s*:?\s*(.+?)(?:\n|$)',
+            r'- \[ \]\s*(.+?)(?:\n|$)',  # Markdownチェックボックス
+            r'\* \[ \]\s*(.+?)(?:\n|$)',
+            r'\d+\.\s*(.+?)(?:\n|$)',  # 番号付きリスト
+            r'[・•]\s*(.+?)(?:\n|$)',  # 箇条書き
+        ]
+        
+        current_time = datetime.now().isoformat()
+        
+        for pattern in patterns:
+            matches = re.finditer(pattern, text, re.MULTILINE | re.IGNORECASE)
+            for match in matches:
+                content = match.group(1).strip()
+                if content and len(content) > 3:  # 短すぎるものは除外
+                    # 優先度を推定
+                    priority = "medium"
+                    if any(word in content.lower() for word in ['urgent', '急', '緊急', 'asap']):
+                        priority = "high"
+                    elif any(word in content.lower() for word in ['later', '後で', '将来']):
+                        priority = "low"
+                    
+                    # IDを生成
+                    todo_id = hashlib.md5(f"{source_file}:{source_section}:{content}".encode()).hexdigest()[:8]
+                    
+                    todo = TodoItem(
+                        id=todo_id,
+                        content=content,
+                        status="pending",
+                        priority=priority,
+                        created_at=current_time,
+                        updated_at=current_time,
+                        source_file=source_file,
+                        source_section=source_section
+                    )
+                    todos.append(todo)
+        
+        return todos
 
     def _check_document_updates(self) -> List[str]:
         """更新のあったドキュメントのパスを取得する"""
@@ -151,6 +239,16 @@ class RAGSystem:
         """セクションからノードを作成する"""
         nodes = []
         for i, section in enumerate(sections):
+            # セクションからTODOを抽出
+            section_todos = self._extract_todos_from_text(
+                section.content, doc_id, section.header
+            )
+            
+            # 既存のTODOと重複チェック
+            for todo in section_todos:
+                if not any(existing.id == todo.id for existing in self.todos):
+                    self.todos.append(todo)
+            
             header_node = TextNode(
                 text=section.header,
                 metadata={
@@ -408,3 +506,105 @@ class RAGSystem:
                     sleep(0.1)
 
             print("\n" + "-" * 20)
+    
+    def get_todos(self, status: Optional[str] = None) -> List[TodoItem]:
+        """TODOリストを取得する"""
+        if status:
+            return [todo for todo in self.todos if todo.status == status]
+        return self.todos
+    
+    def add_todo(self, content: str, priority: str = "medium", source_file: str = "manual", source_section: str = "manual") -> TodoItem:
+        """TODO項目を手動で追加する"""
+        current_time = datetime.now().isoformat()
+        todo_id = hashlib.md5(f"{source_file}:{source_section}:{content}:{current_time}".encode()).hexdigest()[:8]
+        
+        todo = TodoItem(
+            id=todo_id,
+            content=content,
+            status="pending",
+            priority=priority,
+            created_at=current_time,
+            updated_at=current_time,
+            source_file=source_file,
+            source_section=source_section
+        )
+        
+        self.todos.append(todo)
+        self._save_todos()
+        return todo
+    
+    def update_todo(self, todo_id: str, **kwargs) -> Optional[TodoItem]:
+        """TODO項目を更新する"""
+        for todo in self.todos:
+            if todo.id == todo_id:
+                for key, value in kwargs.items():
+                    if hasattr(todo, key):
+                        setattr(todo, key, value)
+                todo.updated_at = datetime.now().isoformat()
+                self._save_todos()
+                return todo
+        return None
+    
+    def delete_todo(self, todo_id: str) -> bool:
+        """TODO項目を削除する"""
+        for i, todo in enumerate(self.todos):
+            if todo.id == todo_id:
+                del self.todos[i]
+                self._save_todos()
+                return True
+        return False
+    
+    def aggregate_todos_by_date(self) -> Dict[str, List[TodoItem]]:
+        """日付別にTODOを集約する"""
+        aggregated = {}
+        for todo in self.todos:
+            date_key = todo.created_at[:10]  # YYYY-MM-DDを抽出
+            if date_key not in aggregated:
+                aggregated[date_key] = []
+            aggregated[date_key].append(todo)
+        
+        # 日付でソート
+        return dict(sorted(aggregated.items(), reverse=True))
+    
+    def get_overdue_todos(self) -> List[TodoItem]:
+        """期限切れのTODOを取得する"""
+        current_date = datetime.now().date()
+        overdue_todos = []
+        
+        for todo in self.todos:
+            if todo.due_date:
+                try:
+                    due_date = datetime.fromisoformat(todo.due_date).date()
+                    if due_date < current_date and todo.status != "completed":
+                        overdue_todos.append(todo)
+                except ValueError:
+                    continue
+        
+        return overdue_todos
+    
+    def extract_todos_from_documents(self) -> int:
+        """全てのドキュメントからTODOを再抽出する"""
+        initial_count = len(self.todos)
+        
+        # 既存のTODOをクリアして再抽出
+        self.todos = []
+        
+        for root, _, files in os.walk(self.data_dir):
+            for file in files:
+                if file.endswith('.md'):
+                    file_path = os.path.join(root, file)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            content = f.read()
+                            sections = self._parse_markdown(content)
+                            
+                            for section in sections:
+                                todos = self._extract_todos_from_text(
+                                    section.content, file_path, section.header
+                                )
+                                self.todos.extend(todos)
+                    except Exception as e:
+                        print(f"Error processing {file_path}: {e}")
+        
+        self._save_todos()
+        return len(self.todos) - initial_count

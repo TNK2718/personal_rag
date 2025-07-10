@@ -109,6 +109,142 @@ def get_mock_response(query_text: str) -> Dict[str, Any]:
         ]
     }
 
+@app.route('/api/todos', methods=['GET'])
+def get_todos():
+    """TODOリストを取得するエンドポイント"""
+    try:
+        if rag_system is None:
+            return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
+        
+        status = request.args.get('status')
+        todos = rag_system.get_todos(status)
+        
+        # dataclassをdictに変換
+        todos_dict = [asdict(todo) for todo in todos]
+        
+        return jsonify({
+            'todos': todos_dict,
+            'count': len(todos_dict)
+        })
+    except Exception as e:
+        logger.error(f"TODO取得中にエラーが発生しました: {e}")
+        return jsonify({'error': f'TODO取得に失敗しました: {str(e)}'}), 500
+
+@app.route('/api/todos', methods=['POST'])
+def create_todo():
+    """新しいTODOを作成するエンドポイント"""
+    try:
+        if rag_system is None:
+            return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
+        
+        data = request.get_json()
+        if not data or 'content' not in data:
+            return jsonify({'error': 'コンテンツが指定されていません'}), 400
+        
+        content = data['content']
+        priority = data.get('priority', 'medium')
+        source_file = data.get('source_file', 'manual')
+        source_section = data.get('source_section', 'manual')
+        
+        todo = rag_system.add_todo(content, priority, source_file, source_section)
+        
+        return jsonify(asdict(todo)), 201
+    except Exception as e:
+        logger.error(f"TODO作成中にエラーが発生しました: {e}")
+        return jsonify({'error': f'TODO作成に失敗しました: {str(e)}'}), 500
+
+@app.route('/api/todos/<todo_id>', methods=['PUT'])
+def update_todo(todo_id):
+    """TODOを更新するエンドポイント"""
+    try:
+        if rag_system is None:
+            return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
+        
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': '更新データが指定されていません'}), 400
+        
+        todo = rag_system.update_todo(todo_id, **data)
+        
+        if todo is None:
+            return jsonify({'error': 'TODOが見つかりません'}), 404
+        
+        return jsonify(asdict(todo))
+    except Exception as e:
+        logger.error(f"TODO更新中にエラーが発生しました: {e}")
+        return jsonify({'error': f'TODO更新に失敗しました: {str(e)}'}), 500
+
+@app.route('/api/todos/<todo_id>', methods=['DELETE'])
+def delete_todo(todo_id):
+    """TODOを削除するエンドポイント"""
+    try:
+        if rag_system is None:
+            return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
+        
+        success = rag_system.delete_todo(todo_id)
+        
+        if not success:
+            return jsonify({'error': 'TODOが見つかりません'}), 404
+        
+        return jsonify({'message': 'TODOが削除されました'})
+    except Exception as e:
+        logger.error(f"TODO削除中にエラーが発生しました: {e}")
+        return jsonify({'error': f'TODO削除に失敗しました: {str(e)}'}), 500
+
+@app.route('/api/todos/aggregate', methods=['GET'])
+def aggregate_todos():
+    """日付別にTODOを集約するエンドポイント"""
+    try:
+        if rag_system is None:
+            return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
+        
+        aggregated = rag_system.aggregate_todos_by_date()
+        
+        # dataclassをdictに変換
+        result = {}
+        for date, todos in aggregated.items():
+            result[date] = [asdict(todo) for todo in todos]
+        
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"TODO集約中にエラーが発生しました: {e}")
+        return jsonify({'error': f'TODO集約に失敗しました: {str(e)}'}), 500
+
+@app.route('/api/todos/extract', methods=['POST'])
+def extract_todos():
+    """メモ書きからTODOを抽出するエンドポイント"""
+    try:
+        if rag_system is None:
+            return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
+        
+        new_todos_count = rag_system.extract_todos_from_documents()
+        
+        return jsonify({
+            'message': f'{new_todos_count}個の新しいTODOが抽出されました',
+            'new_todos_count': new_todos_count
+        })
+    except Exception as e:
+        logger.error(f"TODO抽出中にエラーが発生しました: {e}")
+        return jsonify({'error': f'TODO抽出に失敗しました: {str(e)}'}), 500
+
+@app.route('/api/todos/overdue', methods=['GET'])
+def get_overdue_todos():
+    """期限切れのTODOを取得するエンドポイント"""
+    try:
+        if rag_system is None:
+            return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
+        
+        overdue_todos = rag_system.get_overdue_todos()
+        todos_dict = [asdict(todo) for todo in overdue_todos]
+        
+        return jsonify({
+            'todos': todos_dict,
+            'count': len(todos_dict)
+        })
+    except Exception as e:
+        logger.error(f"期限切れTODO取得中にエラーが発生しました: {e}")
+        return jsonify({'error': f'期限切れTODO取得に失敗しました: {str(e)}'}), 500
+
 # 静的ファイルを提供するエンドポイント
 @app.route('/')
 def serve_frontend():
