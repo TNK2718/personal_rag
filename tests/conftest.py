@@ -180,6 +180,19 @@ def mock_rag_system(temp_dir):
             return real_rag._create_nodes_from_sections.__func__(
                 self, sections, doc_id)
 
+        # 新しいメソッドの追加
+        def _split_text_by_length(self, text, chunk_size=800, overlap=100):
+            return real_rag._split_text_by_length.__func__(
+                self, text, chunk_size, overlap)
+
+        def _calculate_content_diversity(self, selected_nodes, candidate_node, lambda_param=0.5):
+            return real_rag._calculate_content_diversity.__func__(
+                self, selected_nodes, candidate_node, lambda_param)
+
+        def _select_diverse_nodes(self, nodes, target_count=3, lambda_param=0.7):
+            return real_rag._select_diverse_nodes.__func__(
+                self, nodes, target_count, lambda_param)
+
         rag_system._parse_markdown = MethodType(_parse_markdown, rag_system)
         rag_system._extract_todos_from_text = MethodType(
             _extract_todos_from_text, rag_system)
@@ -189,6 +202,14 @@ def mock_rag_system(temp_dir):
             _check_document_updates, rag_system)
         rag_system._create_nodes_from_sections = MethodType(
             _create_nodes_from_sections, rag_system)
+
+        # 新しいメソッドのバインド
+        rag_system._split_text_by_length = MethodType(
+            _split_text_by_length, rag_system)
+        rag_system._calculate_content_diversity = MethodType(
+            _calculate_content_diversity, rag_system)
+        rag_system._select_diverse_nodes = MethodType(
+            _select_diverse_nodes, rag_system)
 
         return rag_system
 

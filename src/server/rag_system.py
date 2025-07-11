@@ -25,6 +25,8 @@ DEFAULT_DATA_DIR = "./data"
 DEFAULT_EMBEDDING_DIM = 768  # nomic-embed-textの次元数
 HASH_FILE = "document_hashes.json"
 TODO_FILE = "todos.json"
+DEFAULT_CHUNK_SIZE = 800  # チャンクサイズ（文字数）
+DEFAULT_CHUNK_OVERLAP = 100  # チャンク間のオーバーラップ（文字数）
 
 
 @dataclass
@@ -142,9 +144,7 @@ class RAGSystem:
             r'(?:NOTE|Note|note)\s*:?\s*(.+?)(?:\n|$)',
             r'(?:XXX|xxx)\s*:?\s*(.+?)(?:\n|$)',
             r'- \[ \]\s*(.+?)(?:\n|$)',  # Markdownチェックボックス
-            r'\* \[ \]\s*(.+?)(?:\n|$)',
-            r'\d+\.\s*(.+?)(?:\n|$)',  # 番号付きリスト
-            r'[・•]\s*(.+?)(?:\n|$)',  # 箇条書き
+            r'\* \[ \]\s*(.+?)(?:\n|$)'
         ]
 
         current_time = datetime.now().isoformat()
@@ -197,6 +197,63 @@ class RAGSystem:
 
         return updated_files
 
+    def _split_text_by_length(
+        self,
+        text: str,
+        chunk_size: int = DEFAULT_CHUNK_SIZE,
+        overlap: int = DEFAULT_CHUNK_OVERLAP
+    ) -> List[str]:
+        """
+        テキストを指定された文字数で分割する
+
+        Args:
+            text: 分割するテキスト
+            chunk_size: チャンクサイズ（文字数）
+            overlap: チャンク間のオーバーラップ（文字数）
+
+        Returns:
+            分割されたテキストのリスト
+        """
+        if len(text) <= chunk_size:
+            return [text]
+
+        chunks = []
+        start = 0
+
+        while start < len(text):
+            end = start + chunk_size
+
+            # テキストの終端を超えないように調整
+            if end >= len(text):
+                chunks.append(text[start:])
+                break
+
+            # 文の境界で切るための調整（句読点を探す）
+            chunk_text = text[start:end]
+
+            # 句読点で終わる位置を探す
+            sentence_ends = []
+            for i, char in enumerate(chunk_text):
+                if char in ['。', '！', '？', '\n']:
+                    sentence_ends.append(start + i + 1)
+
+            # 句読点が見つかった場合、最後の句読点で切る
+            if sentence_ends and sentence_ends[-1] < start + chunk_size:
+                actual_end = sentence_ends[-1]
+                chunks.append(text[start:actual_end])
+                start = actual_end - overlap
+            else:
+                # 句読点が見つからない場合、指定サイズで切る
+                chunks.append(text[start:end])
+                start = end - overlap
+
+            # 重複を避けるため、startが負数にならないように調整
+            if start < 0:
+                start = 0
+
+        # 空のチャンクを除去
+        return [chunk.strip() for chunk in chunks if chunk.strip()]
+
     def _parse_markdown(self, content: str) -> List[MarkdownSection]:
         """Markdownコンテンツをパースしてセクションに分割する"""
         tokens = self.md_parser.parse(content)
@@ -208,12 +265,16 @@ class RAGSystem:
 
         for token in tokens:
             if token.type == "heading_open":
+                # 前のセクションを保存
                 if current_header and current_content:
-                    sections.append(MarkdownSection(
-                        header=current_header,
-                        content="\n".join(current_content).strip(),
-                        level=current_level
-                    ))
+                    content_text = "\n".join(current_content).strip()
+                    # 空のセクションのみスキップ
+                    if content_text:
+                        sections.append(MarkdownSection(
+                            header=current_header,
+                            content=content_text,
+                            level=current_level
+                        ))
                 current_level = int(token.tag[1])  # h1 -> 1, h2 -> 2, etc.
                 current_content = []
                 in_header = True
@@ -224,13 +285,36 @@ class RAGSystem:
                     current_header = token.content
                 else:
                     current_content.append(token.content)
+            elif token.type in [
+                "paragraph_open", "list_item_open", "code_block"
+            ]:
+                # パラグラフやリスト項目の開始をマーク
+                pass
+            elif token.type in ["paragraph_close", "list_item_close"]:
+                # パラグラフやリスト項目の終了をマーク
+                if not in_header:
+                    current_content.append("\n")
 
+        # 最後のセクションを処理
         if current_header and current_content:
-            sections.append(MarkdownSection(
-                header=current_header,
-                content="\n".join(current_content).strip(),
-                level=current_level
-            ))
+            content_text = "\n".join(current_content).strip()
+            if content_text:
+                sections.append(MarkdownSection(
+                    header=current_header,
+                    content=content_text,
+                    level=current_level
+                ))
+
+        # セクションがない場合（ヘッダーなしの文書）、文字数でチャンキング
+        if not sections and content.strip():
+            chunks = self._split_text_by_length(content.strip())
+
+            for chunk_idx, chunk in enumerate(chunks):
+                sections.append(MarkdownSection(
+                    header=f"チャンク {chunk_idx + 1}",
+                    content=chunk,
+                    level=1
+                ))
 
         return sections
 
@@ -239,12 +323,14 @@ class RAGSystem:
         sections: List[MarkdownSection],
         doc_id: str
     ) -> List[TextNode]:
-        """セクションからノードを作成する"""
+        """セクションからノードを作成する（チャンキング対応）"""
         nodes = []
 
         # ファイルパスからフォルダ名を抽出
         file_path = doc_id
         folder_name = ""
+
+        # 実際のファイルパスから情報を抽出
         if file_path.startswith(self.data_dir):
             rel_path = os.path.relpath(file_path, self.data_dir)
             folder_parts = os.path.dirname(rel_path).split(os.sep)
@@ -278,23 +364,40 @@ class RAGSystem:
                 "level": section.level
             }
 
-            header_node = TextNode(
-                text=section.header,
-                metadata={
-                    **common_metadata,
-                    "type": "header"
-                }
-            )
+            # コンテンツのみでノードを作成（ヘッダーはメタデータのみ）
+            content_text = section.content.strip()
 
-            content_node = TextNode(
-                text=section.content,
-                metadata={
-                    **common_metadata,
-                    "type": "content"
-                }
-            )
+            # 空のコンテンツのみスキップ
+            if not content_text:
+                continue
 
-            nodes.extend([header_node, content_node])
+            # セクションが長い場合はチャンキング
+            if len(content_text) > DEFAULT_CHUNK_SIZE:
+                chunks = self._split_text_by_length(content_text)
+
+                for chunk_idx, chunk in enumerate(chunks):
+                    chunk_node = TextNode(
+                        text=chunk,
+                        metadata={
+                            **common_metadata,
+                            "type": "section_chunk",
+                            "chunk_id": chunk_idx,
+                            "total_chunks": len(chunks),
+                            "text_length": len(chunk)
+                        }
+                    )
+                    nodes.append(chunk_node)
+            else:
+                # 短いセクションはそのまま
+                unified_node = TextNode(
+                    text=content_text,
+                    metadata={
+                        **common_metadata,
+                        "type": "section",
+                        "text_length": len(content_text)
+                    }
+                )
+                nodes.append(unified_node)
 
         return nodes
 
@@ -419,14 +522,32 @@ class RAGSystem:
     def load_documents(self, data_dir: Optional[str] = None) -> List[Document]:
         """ドキュメントを読み込んでセクションに分割する"""
         target_dir = data_dir or self.data_dir
-        documents = SimpleDirectoryReader(target_dir).load_data()
 
         all_nodes = []
-        for doc in documents:
-            if doc.text.strip():
-                sections = self._parse_markdown(doc.text)
-                nodes = self._create_nodes_from_sections(sections, doc.doc_id)
-                all_nodes.extend(nodes)
+        # ファイル毎に個別に処理して、ファイルパス情報を保持
+        for root, _, files in os.walk(target_dir):
+            for file in files:
+                if file.endswith('.md'):
+                    file_path = os.path.join(root, file)
+                    file_path = os.path.normpath(file_path)
+
+                    try:
+                        # 単一ファイルとして読み込み
+                        reader = SimpleDirectoryReader(input_files=[file_path])
+                        docs = reader.load_data()
+
+                        for doc in docs:
+                            if doc.text.strip():
+                                # 実際のファイルパスでdoc_idを上書き
+                                doc.doc_id = file_path
+
+                                sections = self._parse_markdown(doc.text)
+                                nodes = self._create_nodes_from_sections(
+                                    sections, doc.doc_id)
+                                all_nodes.extend(nodes)
+                    except Exception as e:
+                        print(f"ファイル {file_path} の処理中にエラー: {e}")
+                        continue
 
         return [Document(text=node.text, metadata=node.metadata) for node in all_nodes]
 
@@ -452,46 +573,47 @@ class RAGSystem:
         try:
             print(f"[DEBUG] クエリ開始: {query_text}")
 
+            # より多くの候補を取得して多様性を確保
             retriever = self.index.as_retriever(
-                similarity_top_k=3
+                similarity_top_k=10  # 多めに取得して後でフィルタリング
             )
             print("[DEBUG] Retriever作成完了")
-
-            nodes = []
 
             print("[DEBUG] ノード検索開始")
             all_retrieved_nodes = retriever.retrieve(query_text)
             retrieved_count = len(all_retrieved_nodes)
             print(f"[DEBUG] 検索結果: {retrieved_count}個のノードを取得")
 
-            header_nodes = [
-                node for node in all_retrieved_nodes
-                if node.metadata.get("type") == "header"
-            ]
+            # 重複する文書IDとセクションIDの組み合わせを排除
+            unique_nodes = []
+            seen_sections = set()
 
-            content_nodes = [
-                node for node in all_retrieved_nodes
-                if node.metadata.get("type") == "content"
-            ]
+            for node in all_retrieved_nodes:
+                doc_id = node.metadata.get("doc_id", "")
+                section_id = node.metadata.get("section_id", 0)
+                key = f"{doc_id}:{section_id}"
 
-            nodes = header_nodes + content_nodes
-            nodes.sort(key=lambda x: (
-                x.metadata.get("level", 999),
-                -(x.score or 0.0)
-            ))
+                if key not in seen_sections:
+                    unique_nodes.append(node)
+                    seen_sections.add(key)
 
-            header_count = len(header_nodes)
-            content_count = len(content_nodes)
-            print(f"[DEBUG] ノード整理完了: header={header_count}, "
-                  f"content={content_count}")
+                # 異なる文書から8つまでに制限
+                if len(unique_nodes) >= 8:
+                    break
+
+            # 多様性を考慮してノードを選択
+            nodes = self._select_diverse_nodes(unique_nodes, target_count=3)
+
+            print(f"[DEBUG] ノード重複除去完了: {len(nodes)}個のユニークノード")
 
             print("[DEBUG] QueryEngine作成開始")
             query_engine = self.index.as_query_engine(
-                similarity_top_k=3,
+                similarity_top_k=10,  # Retrieverと同じ値に設定
                 system_prompt="""あなたは親切なアシスタントです。
 与えられた文脈に基づいて、日本語で簡潔に回答してください。
 特に、ヘッダー情報を参考にして、文書の構造を意識した回答を心がけてください。
-関連するヘッダーがある場合は、その情報も含めて回答してください。"""
+関連するヘッダーがある場合は、その情報も含めて回答してください。
+複数の異なる観点から情報を統合して、包括的な回答を提供してください。"""
             )
             print("[DEBUG] QueryEngine作成完了")
 
@@ -510,7 +632,7 @@ class RAGSystem:
 
             # ソース情報を整理
             sources = []
-            for node in nodes[:3]:  # 上位3つのノードのみ
+            for node in nodes:
                 sources.append({
                     "header": node.metadata.get("header", ""),
                     "content": node.text,
@@ -520,7 +642,8 @@ class RAGSystem:
                     "section_id": node.metadata.get("section_id", 0),
                     "level": node.metadata.get("level", 1),
                     "type": node.metadata.get("type", ""),
-                    "score": node.score or 0.0
+                    "score": node.score or 0.0,
+                    "text_length": node.metadata.get("text_length", 0)
                 })
 
             sources_count = len(sources)
@@ -559,12 +682,40 @@ class RAGSystem:
 
             print("\n回答:")
 
+            # 改善されたクエリエンジンを使用
+            retriever = self.index.as_retriever(
+                similarity_top_k=10
+            )
+
+            # 重複排除を適用
+            all_retrieved_nodes = retriever.retrieve(query_text)
+            unique_nodes = []
+            seen_sections = set()
+
+            for node in all_retrieved_nodes:
+                doc_id = node.metadata.get("doc_id", "")
+                section_id = node.metadata.get("section_id", 0)
+                key = f"{doc_id}:{section_id}"
+
+                if key not in seen_sections:
+                    unique_nodes.append(node)
+                    seen_sections.add(key)
+
+                if len(unique_nodes) >= 8:
+                    break
+
+            # 多様性を考慮してノードを選択
+            selected_nodes = self._select_diverse_nodes(
+                unique_nodes, target_count=3
+            )
+
             query_engine = self.index.as_query_engine(
-                similarity_top_k=3,
+                similarity_top_k=10,
                 system_prompt="""あなたは親切なアシスタントです。
 与えられた文脈に基づいて、日本語で簡潔に回答してください。
 特に、ヘッダー情報を参考にして、文書の構造を意識した回答を心がけてください。
 関連するヘッダーがある場合は、その情報も含めて回答してください。
+複数の異なる観点から情報を統合して、包括的な回答を提供してください。
 できるだけ短い単位で区切って回答を生成してください。"""
             )
 
@@ -578,6 +729,9 @@ class RAGSystem:
                     sleep(0.1)
 
             print("\n" + "-" * 20)
+
+            # デバッグ情報を表示（任意）
+            print(f"[参考] 使用されたソース: {len(selected_nodes)}個のユニークセクション")
 
     def get_todos(self, status: Optional[str] = None) -> List[TodoItem]:
         """TODOリストを取得する"""
@@ -681,3 +835,102 @@ class RAGSystem:
 
         self._save_todos()
         return len(self.todos) - initial_count
+
+    def _calculate_content_diversity(
+        self,
+        selected_nodes: List,
+        candidate_node,
+        lambda_param: float = 0.5
+    ) -> float:
+        """
+        選択済みノードとの多様性を計算する（MMRライクなアルゴリズム）
+
+        Args:
+            selected_nodes: 既に選択されたノード
+            candidate_node: 候補ノード
+            lambda_param: 関連性vs多様性のバランス（0-1）
+
+        Returns:
+            多様性スコア（高いほど多様性がある）
+        """
+        if not selected_nodes:
+            return candidate_node.score or 0.0
+
+        # 候補ノードとの類似度（関連性）
+        relevance_score = candidate_node.score or 0.0
+
+        # 既選択ノードとの最大類似度を計算（多様性の逆指標）
+        max_similarity = 0.0
+        candidate_text = candidate_node.text
+
+        for selected in selected_nodes:
+            # 簡単な文字ベースの類似度計算
+            selected_text = selected.text
+            common_words = set(candidate_text.split()) & set(
+                selected_text.split()
+            )
+            similarity = len(common_words) / max(
+                len(set(candidate_text.split())),
+                len(set(selected_text.split())),
+                1
+            )
+            max_similarity = max(max_similarity, similarity)
+
+        # MMRスコア = λ * 関連性 - (1-λ) * 類似度
+        diversity_score = (
+            lambda_param * relevance_score -
+            (1 - lambda_param) * max_similarity
+        )
+
+        return diversity_score
+
+    def _select_diverse_nodes(
+        self,
+        nodes: List,
+        target_count: int = 3,
+        lambda_param: float = 0.7
+    ) -> List:
+        """
+        多様性を考慮してノードを選択する
+
+        Args:
+            nodes: 候補ノードのリスト
+            target_count: 選択するノード数
+            lambda_param: 関連性vs多様性のバランス
+
+        Returns:
+            選択されたノードのリスト
+        """
+        if len(nodes) <= target_count:
+            return nodes
+
+        selected_nodes = []
+        remaining_nodes = nodes.copy()
+
+        # 最初のノードは最高スコアを選択
+        if remaining_nodes:
+            best_node = max(remaining_nodes, key=lambda x: x.score or 0.0)
+            selected_nodes.append(best_node)
+            remaining_nodes.remove(best_node)
+
+        # 残りのノードを多様性を考慮して選択
+        while len(selected_nodes) < target_count and remaining_nodes:
+            best_candidate = None
+            best_score = float('-inf')
+
+            for candidate in remaining_nodes:
+                diversity_score = self._calculate_content_diversity(
+                    selected_nodes, candidate, lambda_param
+                )
+
+                if diversity_score > best_score:
+                    best_score = diversity_score
+                    best_candidate = candidate
+
+            if best_candidate:
+                selected_nodes.append(best_candidate)
+                remaining_nodes.remove(best_candidate)
+            else:
+                break
+
+        return selected_nodes
