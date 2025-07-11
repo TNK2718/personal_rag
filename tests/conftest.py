@@ -74,15 +74,121 @@ def mock_rag_system(temp_dir):
         rag_system.llm = Mock()
         rag_system.embed_model = Mock()
 
-        # メソッドもMockオブジェクトに置き換え
-        rag_system.query = Mock()
-        rag_system.get_todos = Mock()
-        rag_system.add_todo = Mock()
-        rag_system.update_todo = Mock()
-        rag_system.delete_todo = Mock()
-        rag_system.aggregate_todos_by_date = Mock()
-        rag_system.extract_todos_from_documents = Mock()
-        rag_system.get_overdue_todos = Mock()
+        # 実際のメソッドを実装
+        # TODO関連のメソッドを実装
+        def add_todo(self, content, priority="medium", source_file="manual",
+                     source_section="manual"):
+            from datetime import datetime
+            import uuid
+            todo = TodoItem(
+                id=str(uuid.uuid4()),
+                content=content,
+                priority=priority,
+                status="pending",
+                created_at=datetime.now().isoformat(),
+                updated_at=datetime.now().isoformat(),
+                source_file=source_file,
+                source_section=source_section,
+                tags=[]
+            )
+            self.todos.append(todo)
+            return todo
+
+        def get_todos(self, status=None):
+            if status:
+                return [todo for todo in self.todos
+                        if todo.status == status]
+            return self.todos.copy()
+
+        def update_todo(self, todo_id, **kwargs):
+            for todo in self.todos:
+                if todo.id == todo_id:
+                    for key, value in kwargs.items():
+                        if hasattr(todo, key):
+                            setattr(todo, key, value)
+                    return todo
+            return None
+
+        def delete_todo(self, todo_id):
+            for i, todo in enumerate(self.todos):
+                if todo.id == todo_id:
+                    self.todos.pop(i)
+                    return True
+            return False
+
+        def get_overdue_todos(self):
+            from datetime import datetime
+            current_time = datetime.now()
+            overdue = []
+            for todo in self.todos:
+                if todo.due_date and todo.status != "completed":
+                    due_date = datetime.fromisoformat(todo.due_date)
+                    if due_date < current_time:
+                        overdue.append(todo)
+            return overdue
+
+        def aggregate_todos_by_date(self):
+            result = {}
+            for todo in self.todos:
+                date_key = todo.created_at[:10]  # YYYY-MM-DD
+                if date_key not in result:
+                    result[date_key] = []
+                result[date_key].append(todo)
+            return result
+
+        def query(self, query_text):
+            return {
+                'answer': f'モック回答: {query_text}',
+                'sources': []
+            }
+
+        def extract_todos_from_documents(self):
+            return 0
+
+        # 実際のRAGSystemメソッドをバインド
+        from types import MethodType
+        rag_system.add_todo = MethodType(add_todo, rag_system)
+        rag_system.get_todos = MethodType(get_todos, rag_system)
+        rag_system.update_todo = MethodType(update_todo, rag_system)
+        rag_system.delete_todo = MethodType(delete_todo, rag_system)
+        rag_system.get_overdue_todos = MethodType(
+            get_overdue_todos, rag_system)
+        rag_system.aggregate_todos_by_date = MethodType(
+            aggregate_todos_by_date, rag_system)
+        rag_system.query = MethodType(query, rag_system)
+        rag_system.extract_todos_from_documents = MethodType(
+            extract_todos_from_documents, rag_system)
+
+        # 実際のRAGSystemから必要なメソッドをインポートして設定
+        real_rag = RAGSystem.__new__(RAGSystem)
+
+        # プライベートメソッドのバインド（selfが必要）
+        def _parse_markdown(self, content):
+            return real_rag._parse_markdown.__func__(self, content)
+
+        def _extract_todos_from_text(self, text, source_file, source_section):
+            return real_rag._extract_todos_from_text.__func__(
+                self, text, source_file, source_section)
+
+        def _calculate_file_hash(self, file_path):
+            return real_rag._calculate_file_hash.__func__(self, file_path)
+
+        def _check_document_updates(self):
+            return real_rag._check_document_updates.__func__(self)
+
+        def _create_nodes_from_sections(self, sections, doc_id):
+            return real_rag._create_nodes_from_sections.__func__(
+                self, sections, doc_id)
+
+        rag_system._parse_markdown = MethodType(_parse_markdown, rag_system)
+        rag_system._extract_todos_from_text = MethodType(
+            _extract_todos_from_text, rag_system)
+        rag_system._calculate_file_hash = MethodType(
+            _calculate_file_hash, rag_system)
+        rag_system._check_document_updates = MethodType(
+            _check_document_updates, rag_system)
+        rag_system._create_nodes_from_sections = MethodType(
+            _create_nodes_from_sections, rag_system)
 
         return rag_system
 

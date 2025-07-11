@@ -24,6 +24,7 @@ test = [
 ]
 
 [project.scripts]
+# 基本的なテストのエントリーポイント
 test = "pytest"
 
 [tool.pytest.ini_options]

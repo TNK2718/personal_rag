@@ -62,7 +62,7 @@ ollama pull nomic-embed-text
 ### サーバーの起動
 
 ```bash
-# uvを使用してサーバーを起動（推奨）
+# uvを使用（全プラットフォーム共通・推奨）
 uv run python src/server/server.py
 
 # または従来の方法
@@ -119,23 +119,35 @@ python src/server/server.py
 
 ## テスト
 
-### テストの実行
+### テストの実行（全プラットフォーム共通）
 
 ```bash
+# 依存関係の同期
+uv sync
+
 # 全テストを実行
-make test
+uv run pytest
 
 # カバレッジ付きでテストを実行
-make test-cov
+uv run pytest --cov=src --cov-report=html --cov-report=term
 
 # ユニットテストのみ実行
-make test-unit
+uv run pytest tests/test_rag_system.py tests/test_data_classes.py -v
 
 # APIテストのみ実行
-make test-api
+uv run pytest tests/test_server.py -v
 
-# テスト環境のセットアップ
-make setup
+# ファイル管理機能のテスト
+uv run pytest tests/test_file_management.py -v
+
+# フロントエンド統合テスト
+uv run pytest tests/test_frontend.py -v
+
+# 新機能のテスト
+uv run pytest tests/test_file_management.py tests/test_frontend.py -v
+
+# 失敗時即停止テスト
+uv run pytest --maxfail=1 -x
 ```
 
 ### テスト構成
@@ -148,9 +160,17 @@ make setup
 ### カバレッジレポート
 
 ```bash
-# カバレッジレポートを生成・表示
-make test-cov
-make docs
+# カバレッジレポートを生成
+uv run pytest --cov=src --cov-report=html --cov-report=term
+
+# レポートをブラウザで表示（Windows）
+start htmlcov/index.html
+
+# レポートをブラウザで表示（Mac）
+open htmlcov/index.html
+
+# レポートをブラウザで表示（Linux）
+xdg-open htmlcov/index.html
 ```
 
 カバレッジレポートは `htmlcov/index.html` で確認できます。

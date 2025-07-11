@@ -47,8 +47,8 @@ class TodoItem:
     source_file: str
     source_section: str
     due_date: Optional[str] = None
-    tags: List[str] = None
-    
+    tags: Optional[List[str]] = None
+
     def __post_init__(self):
         if self.tags is None:
             self.tags = []
@@ -108,7 +108,7 @@ class RAGSystem:
         os.makedirs(self.persist_dir, exist_ok=True)
         with open(self.hash_file_path, 'w', encoding='utf-8') as f:
             json.dump(self.document_hashes, f, ensure_ascii=False, indent=2)
-    
+
     def _load_todos(self) -> List[TodoItem]:
         """保存されているTODOリストを読み込む"""
         if os.path.exists(self.todo_file_path):
@@ -116,7 +116,7 @@ class RAGSystem:
                 todo_data = json.load(f)
                 return [TodoItem(**item) for item in todo_data]
         return []
-    
+
     def _save_todos(self) -> None:
         """TODOリストを保存する"""
         os.makedirs(self.persist_dir, exist_ok=True)
@@ -128,11 +128,11 @@ class RAGSystem:
         """ファイルのハッシュ値を計算する"""
         with open(file_path, 'rb') as f:
             return hashlib.md5(f.read()).hexdigest()
-    
+
     def _extract_todos_from_text(self, text: str, source_file: str, source_section: str) -> List[TodoItem]:
         """テキストからTODO項目を抽出する"""
         todos = []
-        
+
         # 様々なTODOパターンを検出
         patterns = [
             r'(?:TODO|Todo|todo)\s*:?\s*(.+?)(?:\n|$)',
@@ -146,9 +146,9 @@ class RAGSystem:
             r'\d+\.\s*(.+?)(?:\n|$)',  # 番号付きリスト
             r'[・•]\s*(.+?)(?:\n|$)',  # 箇条書き
         ]
-        
+
         current_time = datetime.now().isoformat()
-        
+
         for pattern in patterns:
             matches = re.finditer(pattern, text, re.MULTILINE | re.IGNORECASE)
             for match in matches:
@@ -160,10 +160,11 @@ class RAGSystem:
                         priority = "high"
                     elif any(word in content.lower() for word in ['later', '後で', '将来']):
                         priority = "low"
-                    
+
                     # IDを生成
-                    todo_id = hashlib.md5(f"{source_file}:{source_section}:{content}".encode()).hexdigest()[:8]
-                    
+                    todo_id = hashlib.md5(
+                        f"{source_file}:{source_section}:{content}".encode()).hexdigest()[:8]
+
                     todo = TodoItem(
                         id=todo_id,
                         content=content,
@@ -175,7 +176,7 @@ class RAGSystem:
                         source_section=source_section
                     )
                     todos.append(todo)
-        
+
         return todos
 
     def _check_document_updates(self) -> List[str]:
@@ -185,6 +186,8 @@ class RAGSystem:
             for file in files:
                 if file.endswith('.md'):
                     file_path = os.path.join(root, file)
+                    # パスを正規化してクロスプラットフォーム対応
+                    file_path = os.path.normpath(file_path)
                     current_hash = self._calculate_file_hash(file_path)
                     stored_hash = self.document_hashes.get(file_path)
 
@@ -238,35 +241,56 @@ class RAGSystem:
     ) -> List[TextNode]:
         """セクションからノードを作成する"""
         nodes = []
+
+        # ファイルパスからフォルダ名を抽出
+        file_path = doc_id
+        folder_name = ""
+        if file_path.startswith(self.data_dir):
+            rel_path = os.path.relpath(file_path, self.data_dir)
+            folder_parts = os.path.dirname(rel_path).split(os.sep)
+            # 空文字列や'.'を除外してフォルダ名を構築
+            folder_parts = [
+                part for part in folder_parts if part and part != '.']
+            if folder_parts:
+                folder_name = "/".join(folder_parts)
+
+        # ファイル名（拡張子なし）を取得
+        file_name = os.path.splitext(os.path.basename(file_path))[0]
+
         for i, section in enumerate(sections):
             # セクションからTODOを抽出
             section_todos = self._extract_todos_from_text(
                 section.content, doc_id, section.header
             )
-            
+
             # 既存のTODOと重複チェック
             for todo in section_todos:
                 if not any(existing.id == todo.id for existing in self.todos):
                     self.todos.append(todo)
-            
+
+            # 共通のメタデータ
+            common_metadata = {
+                "doc_id": doc_id,
+                "file_name": file_name,
+                "folder_name": folder_name,
+                "section_id": i,
+                "header": section.header,
+                "level": section.level
+            }
+
             header_node = TextNode(
                 text=section.header,
                 metadata={
-                    "doc_id": doc_id,
-                    "section_id": i,
-                    "type": "header",
-                    "level": section.level
+                    **common_metadata,
+                    "type": "header"
                 }
             )
 
             content_node = TextNode(
                 text=section.content,
                 metadata={
-                    "doc_id": doc_id,
-                    "section_id": i,
-                    "type": "content",
-                    "header": section.header,
-                    "level": section.level
+                    **common_metadata,
+                    "type": "content"
                 }
             )
 
@@ -287,7 +311,7 @@ class RAGSystem:
 
                 if updated_files:
                     print(f"{len(updated_files)}個のファイルが更新されています。")
-                    
+
                     faiss_index = faiss.IndexFlatL2(self.embedding_dim)
                     vector_store = FaissVectorStore(faiss_index=faiss_index)
                     storage_context = StorageContext.from_defaults(
@@ -425,55 +449,103 @@ class RAGSystem:
 
     def query(self, query_text: str) -> dict:
         """質問に対する回答を生成する"""
-        retriever = self.index.as_retriever(
-            similarity_top_k=3
-        )
+        try:
+            print(f"[DEBUG] クエリ開始: {query_text}")
 
-        nodes = []
+            retriever = self.index.as_retriever(
+                similarity_top_k=3
+            )
+            print("[DEBUG] Retriever作成完了")
 
-        header_nodes = [
-            node for node in retriever.retrieve(query_text)
-            if node.metadata.get("type") == "header"
-        ]
+            nodes = []
 
-        content_nodes = [
-            node for node in retriever.retrieve(query_text)
-            if node.metadata.get("type") == "content"
-        ]
+            print("[DEBUG] ノード検索開始")
+            all_retrieved_nodes = retriever.retrieve(query_text)
+            retrieved_count = len(all_retrieved_nodes)
+            print(f"[DEBUG] 検索結果: {retrieved_count}個のノードを取得")
 
-        nodes = header_nodes + content_nodes
-        nodes.sort(key=lambda x: (
-            x.metadata.get("level", 999),
-            -(x.score or 0.0)
-        ))
+            header_nodes = [
+                node for node in all_retrieved_nodes
+                if node.metadata.get("type") == "header"
+            ]
 
-        query_engine = self.index.as_query_engine(
-            similarity_top_k=3,
-            system_prompt="""あなたは親切なアシスタントです。
+            content_nodes = [
+                node for node in all_retrieved_nodes
+                if node.metadata.get("type") == "content"
+            ]
+
+            nodes = header_nodes + content_nodes
+            nodes.sort(key=lambda x: (
+                x.metadata.get("level", 999),
+                -(x.score or 0.0)
+            ))
+
+            header_count = len(header_nodes)
+            content_count = len(content_nodes)
+            print(f"[DEBUG] ノード整理完了: header={header_count}, "
+                  f"content={content_count}")
+
+            print("[DEBUG] QueryEngine作成開始")
+            query_engine = self.index.as_query_engine(
+                similarity_top_k=3,
+                system_prompt="""あなたは親切なアシスタントです。
 与えられた文脈に基づいて、日本語で簡潔に回答してください。
 特に、ヘッダー情報を参考にして、文書の構造を意識した回答を心がけてください。
 関連するヘッダーがある場合は、その情報も含めて回答してください。"""
-        )
+            )
+            print("[DEBUG] QueryEngine作成完了")
 
-        response = query_engine.query(query_text)
-        answer = str(response)
+            print("[DEBUG] LLMクエリ実行開始")
+            response = query_engine.query(query_text)
+            response_type = type(response)
+            print(f"[DEBUG] LLMクエリ実行完了: response type={response_type}")
 
-        # ソース情報を整理
-        sources = []
-        for node in nodes[:3]:  # 上位3つのノードのみ
-            sources.append({
-                "header": node.metadata.get("header", ""),
-                "content": node.text,
-                "doc_id": node.metadata.get("doc_id", ""),
-                "section_id": node.metadata.get("section_id", 0),
-                "level": node.metadata.get("level", 1),
-                "score": node.score or 0.0
-            })
+            answer = str(response)
+            answer_length = len(answer)
+            print(f"[DEBUG] レスポンス変換完了: answer length={answer_length}")
 
-        return {
-            "answer": answer,
-            "sources": sources
-        }
+            if not answer or answer.strip() == "":
+                print("[WARNING] 空の回答が生成されました")
+                answer = "申し訳ございませんが、適切な回答を生成できませんでした。"
+
+            # ソース情報を整理
+            sources = []
+            for node in nodes[:3]:  # 上位3つのノードのみ
+                sources.append({
+                    "header": node.metadata.get("header", ""),
+                    "content": node.text,
+                    "doc_id": node.metadata.get("doc_id", ""),
+                    "file_name": node.metadata.get("file_name", ""),
+                    "folder_name": node.metadata.get("folder_name", ""),
+                    "section_id": node.metadata.get("section_id", 0),
+                    "level": node.metadata.get("level", 1),
+                    "type": node.metadata.get("type", ""),
+                    "score": node.score or 0.0
+                })
+
+            sources_count = len(sources)
+            print(f"[DEBUG] ソース情報整理完了: {sources_count}個のソース")
+
+            result = {
+                "answer": answer,
+                "sources": sources
+            }
+
+            print("[DEBUG] クエリ処理完了")
+            return result
+
+        except Exception as e:
+            print(f"[ERROR] クエリ処理中にエラーが発生: {e}")
+            import traceback
+            traceback.print_exc()
+
+            # フォールバック応答
+            error_msg = (f"エラーが発生しました: {str(e)}。"
+                         "システム管理者にお問い合わせください。")
+            return {
+                "answer": error_msg,
+                "sources": []
+            }
 
     def run_interactive(self) -> None:
         """インタラクティブな質問応答を実行する"""
@@ -506,18 +578,19 @@ class RAGSystem:
                     sleep(0.1)
 
             print("\n" + "-" * 20)
-    
+
     def get_todos(self, status: Optional[str] = None) -> List[TodoItem]:
         """TODOリストを取得する"""
         if status:
             return [todo for todo in self.todos if todo.status == status]
         return self.todos
-    
+
     def add_todo(self, content: str, priority: str = "medium", source_file: str = "manual", source_section: str = "manual") -> TodoItem:
         """TODO項目を手動で追加する"""
         current_time = datetime.now().isoformat()
-        todo_id = hashlib.md5(f"{source_file}:{source_section}:{content}:{current_time}".encode()).hexdigest()[:8]
-        
+        todo_id = hashlib.md5(
+            f"{source_file}:{source_section}:{content}:{current_time}".encode()).hexdigest()[:8]
+
         todo = TodoItem(
             id=todo_id,
             content=content,
@@ -528,11 +601,11 @@ class RAGSystem:
             source_file=source_file,
             source_section=source_section
         )
-        
+
         self.todos.append(todo)
         self._save_todos()
         return todo
-    
+
     def update_todo(self, todo_id: str, **kwargs) -> Optional[TodoItem]:
         """TODO項目を更新する"""
         for todo in self.todos:
@@ -544,7 +617,7 @@ class RAGSystem:
                 self._save_todos()
                 return todo
         return None
-    
+
     def delete_todo(self, todo_id: str) -> bool:
         """TODO項目を削除する"""
         for i, todo in enumerate(self.todos):
@@ -553,7 +626,7 @@ class RAGSystem:
                 self._save_todos()
                 return True
         return False
-    
+
     def aggregate_todos_by_date(self) -> Dict[str, List[TodoItem]]:
         """日付別にTODOを集約する"""
         aggregated = {}
@@ -562,15 +635,15 @@ class RAGSystem:
             if date_key not in aggregated:
                 aggregated[date_key] = []
             aggregated[date_key].append(todo)
-        
+
         # 日付でソート
         return dict(sorted(aggregated.items(), reverse=True))
-    
+
     def get_overdue_todos(self) -> List[TodoItem]:
         """期限切れのTODOを取得する"""
         current_date = datetime.now().date()
         overdue_todos = []
-        
+
         for todo in self.todos:
             if todo.due_date:
                 try:
@@ -579,16 +652,16 @@ class RAGSystem:
                         overdue_todos.append(todo)
                 except ValueError:
                     continue
-        
+
         return overdue_todos
-    
+
     def extract_todos_from_documents(self) -> int:
         """全てのドキュメントからTODOを再抽出する"""
         initial_count = len(self.todos)
-        
+
         # 既存のTODOをクリアして再抽出
         self.todos = []
-        
+
         for root, _, files in os.walk(self.data_dir):
             for file in files:
                 if file.endswith('.md'):
@@ -597,7 +670,7 @@ class RAGSystem:
                         with open(file_path, 'r', encoding='utf-8') as f:
                             content = f.read()
                             sections = self._parse_markdown(content)
-                            
+
                             for section in sections:
                                 todos = self._extract_todos_from_text(
                                     section.content, file_path, section.header
@@ -605,6 +678,6 @@ class RAGSystem:
                                 self.todos.extend(todos)
                     except Exception as e:
                         print(f"Error processing {file_path}: {e}")
-        
+
         self._save_todos()
         return len(self.todos) - initial_count

@@ -1,19 +1,23 @@
 <!DOCTYPE html>
 <html lang="ja">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RAG システム - 引用元付き回答</title>
     <link rel="stylesheet" href="styles.css">
 </head>
+
 <body>
     <div class="container">
         <header class="header">
             <h1>RAG システム</h1>
-            <p>質問に対する回答と引用元、TODO管理を表示します</p>
+            <p>質問に対する回答と引用元、TODO管理、メモ編集、チャンク可視化を提供します</p>
             <div class="nav-tabs">
                 <button class="nav-tab active" data-tab="search">RAG検索</button>
                 <button class="nav-tab" data-tab="todos">TODO管理</button>
+                <button class="nav-tab" data-tab="editor">メモエディタ</button>
+                <button class="nav-tab" data-tab="chunks">チャンク可視化</button>
             </div>
         </header>
 
@@ -66,7 +70,7 @@
                         <option value="completed">完了</option>
                     </select>
                 </div>
-                
+
                 <div class="add-todo-section">
                     <div class="input-group">
                         <input type="text" id="todoInput" placeholder="新しいTODOを入力..." autocomplete="off">
@@ -89,8 +93,93 @@
                 </div>
             </div>
         </div>
+
+        <div id="editorTab" class="tab-content">
+            <div class="editor-section">
+                <div class="editor-controls">
+                    <div class="file-controls">
+                        <select id="fileSelect" class="file-select">
+                            <option value="">ファイルを選択...</option>
+                        </select>
+                        <button id="newFileBtn" class="new-file-btn">新規ファイル</button>
+                        <button id="saveFileBtn" class="save-file-btn" disabled>保存</button>
+                        <button id="deleteFileBtn" class="delete-file-btn" disabled>削除</button>
+                    </div>
+                    <div class="file-info" id="fileInfo">
+                        <span id="currentFilePath">ファイルが選択されていません</span>
+                        <span id="fileStatus"></span>
+                    </div>
+                </div>
+
+                <div class="editor-container">
+                    <div class="editor-toolbar">
+                        <button class="toolbar-btn" data-action="bold">太字</button>
+                        <button class="toolbar-btn" data-action="italic">斜体</button>
+                        <button class="toolbar-btn" data-action="header">見出し</button>
+                        <button class="toolbar-btn" data-action="list">リスト</button>
+                        <button class="toolbar-btn" data-action="code">コード</button>
+                    </div>
+                    <textarea id="markdownEditor" placeholder="Markdownを入力してください...
+# 見出し1
+## 見出し2
+- リスト項目
+**太字** *斜体*
+`コード`"></textarea>
+
+                    <div class="editor-preview" id="markdownPreview">
+                        <h3>プレビュー</h3>
+                        <div id="previewContent">ここにプレビューが表示されます</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="chunksTab" class="tab-content">
+            <div class="chunks-section">
+                <div class="chunks-controls">
+                    <select id="chunkFileSelect" class="file-select">
+                        <option value="">ファイルを選択...</option>
+                    </select>
+                    <button id="analyzeChunksBtn" class="analyze-btn">チャンク解析</button>
+                    <button id="refreshIndexBtn" class="refresh-btn">インデックス更新</button>
+                </div>
+
+                <div id="chunksLoadingIndicator" class="loading-indicator" style="display: none;">
+                    <div class="spinner"></div>
+                    <span>解析中...</span>
+                </div>
+
+                <div class="chunks-container">
+                    <div class="chunks-overview">
+                        <h3>チャンク概要</h3>
+                        <div id="chunksStats" class="chunks-stats">
+                            <div class="stat-item">
+                                <span class="stat-label">総チャンク数:</span>
+                                <span class="stat-value" id="totalChunks">-</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">ヘッダー数:</span>
+                                <span class="stat-value" id="headerChunks">-</span>
+                            </div>
+                            <div class="stat-item">
+                                <span class="stat-label">コンテンツ数:</span>
+                                <span class="stat-value" id="contentChunks">-</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="chunks-list">
+                        <h3>チャンク詳細</h3>
+                        <div id="chunksList" class="chunks-items">
+                            <div class="empty-chunks">ファイルを選択してチャンク解析を実行してください</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
     </div>
 
     <script src="script.js"></script>
 </body>
+
 </html>

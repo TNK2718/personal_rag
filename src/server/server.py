@@ -27,19 +27,47 @@ def initialize_rag_system():
     """RAGシステムを初期化する"""
     global rag_system
     try:
+        logger.info("RAGシステムの初期化を開始します...")
+
         # プロジェクトルートからの相対パスを使用
         project_root = os.path.join(current_dir, '..', '..')
         persist_dir = os.path.join(project_root, 'storage')
         data_dir = os.path.join(project_root, 'data')
+
+        logger.info(f"データディレクトリ: {data_dir}")
+        logger.info(f"永続化ディレクトリ: {persist_dir}")
+
+        # ディレクトリの存在確認
+        if not os.path.exists(data_dir):
+            logger.warning(f"データディレクトリが存在しません: {data_dir}")
+            os.makedirs(data_dir, exist_ok=True)
+            logger.info("データディレクトリを作成しました")
+
+        if not os.path.exists(persist_dir):
+            logger.info(f"永続化ディレクトリが存在しません。"
+                        f"作成します: {persist_dir}")
+            os.makedirs(persist_dir, exist_ok=True)
 
         rag_system = RAGSystem(
             persist_dir=persist_dir,
             data_dir=data_dir
         )
         logger.info("RAGシステムの初期化が完了しました")
+
+    except ImportError as e:
+        logger.error(f"必要なパッケージがインストールされていません: {e}")
+        logger.error("pip install -r requirements.txt または "
+                     "uv sync を実行してください")
+        rag_system = None
+    except ConnectionError as e:
+        logger.error(f"Ollamaサーバーへの接続に失敗しました: {e}")
+        logger.error("Ollamaが起動していることを確認してください")
+        rag_system = None
     except Exception as e:
         logger.error(f"RAGシステムの初期化に失敗しました: {e}")
-        # フォールバックとして、モックシステムを使用
+        logger.error("フォールバックとして、モックシステムを使用します")
+        import traceback
+        traceback.print_exc()
         rag_system = None
 
 
@@ -84,12 +112,22 @@ def query_endpoint():
 
 def get_mock_response(query_text: str) -> Dict[str, Any]:
     """モックレスポンスを生成する"""
+    answer_text = (
+        f'質問「{query_text}」に対する回答です。これはモックの回答で、'
+        f'実際のRAGシステムからの応答ではありません。\n\n'
+        f'実際のシステムでは、この部分に関連するドキュメントから抽出された'
+        f'情報に基づいた回答が表示されます。'
+    )
+
     return {
-        'answer': f'質問「{query_text}」に対する回答です。これはモックの回答で、実際のRAGシステムからの応答ではありません。\n\n実際のシステムでは、この部分に関連するドキュメントから抽出された情報に基づいた回答が表示されます。',
+        'answer': answer_text,
         'sources': [
             {
                 'header': 'サンプル見出し1',
-                'content': 'これは引用元のサンプルコンテンツです。実際のシステムでは、ここに関連するドキュメントの内容が表示されます。',
+                'content': (
+                    'これは引用元のサンプルコンテンツです。実際のシステムでは、'
+                    'ここに関連するドキュメントの内容が表示されます。'
+                ),
                 'doc_id': 'sample_doc_1.md',
                 'section_id': 1,
                 'level': 2,
@@ -97,7 +135,10 @@ def get_mock_response(query_text: str) -> Dict[str, Any]:
             },
             {
                 'header': 'サンプル見出し2',
-                'content': '別の引用元のサンプルコンテンツです。複数の引用元がある場合は、このように複数表示されます。',
+                'content': (
+                    '別の引用元のサンプルコンテンツです。複数の引用元がある場合は、'
+                    'このように複数表示されます。'
+                ),
                 'doc_id': 'sample_doc_2.md',
                 'section_id': 3,
                 'level': 1,
@@ -105,7 +146,9 @@ def get_mock_response(query_text: str) -> Dict[str, Any]:
             },
             {
                 'header': 'サンプル見出し3',
-                'content': 'さらに別の引用元です。関連度スコアによって順序が決まります。',
+                'content': (
+                    'さらに別の引用元です。関連度スコアによって順序が決まります。'
+                ),
                 'doc_id': 'sample_doc_1.md',
                 'section_id': 7,
                 'level': 3,
@@ -286,6 +329,326 @@ def internal_error(error):
     """500エラーハンドラー"""
     logger.error(f"内部エラー: {error}")
     return jsonify({'error': '内部サーバーエラーが発生しました'}), 500
+
+
+@app.route('/api/files', methods=['GET'])
+def list_files():
+    """ファイル一覧を取得するエンドポイント"""
+    try:
+        # テスト環境ではcurrent_dirがプロジェクトルートを指す場合があるため、
+        # dataディレクトリの存在を確認して適切なパスを決定
+        data_dir = None
+        possible_paths = [
+            os.path.join(current_dir, 'data'),  # テスト環境用
+            os.path.join(current_dir, '..', '..', 'data'),  # 通常実行用
+        ]
+
+        for path in possible_paths:
+            if os.path.exists(path):
+                data_dir = path
+                break
+
+        if data_dir is None:
+            # dataディレクトリが存在しない場合は最初のパスを使用して作成
+            data_dir = possible_paths[0]
+            os.makedirs(data_dir, exist_ok=True)
+
+        files = []
+        if os.path.exists(data_dir):
+            for root, _, filenames in os.walk(data_dir):
+                for filename in filenames:
+                    if filename.endswith('.md'):
+                        full_path = os.path.join(root, filename)
+                        rel_path = os.path.relpath(full_path, data_dir)
+
+                        # ファイル情報
+                        stat = os.stat(full_path)
+                        files.append({
+                            'path': rel_path,
+                            'name': filename,
+                            'folder': os.path.dirname(rel_path) or '.',
+                            'size': stat.st_size,
+                            'modified': int(stat.st_mtime)
+                        })
+
+        return jsonify({'files': files})
+    except Exception as e:
+        logger.error(f"ファイル一覧取得中にエラーが発生しました: {e}")
+        return jsonify({'error': f'ファイル一覧取得に失敗しました: {str(e)}'}), 500
+
+
+@app.route('/api/files/<path:file_path>', methods=['GET'])
+def get_file_content(file_path):
+    """ファイル内容を取得するエンドポイント"""
+    try:
+        # テスト環境ではcurrent_dirがプロジェクトルートを指す場合があるため、
+        # dataディレクトリの存在を確認して適切なパスを決定
+        data_dir = None
+        possible_paths = [
+            os.path.join(current_dir, 'data'),  # テスト環境用
+            os.path.join(current_dir, '..', '..', 'data'),  # 通常実行用
+        ]
+
+        for path in possible_paths:
+            if os.path.exists(path):
+                data_dir = path
+                break
+
+        if data_dir is None:
+            data_dir = possible_paths[0]
+
+        full_path = os.path.join(data_dir, file_path)
+
+        # セキュリティチェック：data_dir以外へのアクセスを防ぐ
+        try:
+            # パスを正規化してディレクトリトラバーサル攻撃を防ぐ
+            normalized_data_dir = os.path.normpath(os.path.abspath(data_dir))
+            normalized_full_path = os.path.normpath(
+                os.path.abspath(full_path))
+
+            if not normalized_full_path.startswith(
+                    normalized_data_dir + os.sep):
+                return jsonify({'error': '不正なファイルパスです'}), 400
+        except (ValueError, OSError):
+            return jsonify({'error': '不正なファイルパスです'}), 400
+
+        if not os.path.exists(full_path):
+            return jsonify({'error': 'ファイルが見つかりません'}), 404
+
+        with open(full_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        return jsonify({
+            'content': content,
+            'path': file_path,
+            'size': len(content.encode('utf-8'))
+        })
+    except Exception as e:
+        logger.error(f"ファイル読み込み中にエラーが発生しました: {e}")
+        return jsonify({'error': f'ファイル読み込みに失敗しました: {str(e)}'}), 500
+
+
+@app.route('/api/files/<path:file_path>', methods=['PUT'])
+def save_file_content(file_path):
+    """ファイル内容を保存するエンドポイント"""
+    try:
+        data = request.get_json()
+        if not data or 'content' not in data:
+            return jsonify({'error': 'コンテンツが指定されていません'}), 400
+
+        # データディレクトリのパスを決定
+        data_dir = None
+        possible_paths = [
+            os.path.join(current_dir, 'data'),  # テスト環境用
+            os.path.join(current_dir, '..', '..', 'data'),  # 通常実行用
+        ]
+
+        for path in possible_paths:
+            if os.path.exists(path):
+                data_dir = path
+                break
+
+        if data_dir is None:
+            data_dir = possible_paths[0]
+
+        full_path = os.path.join(data_dir, file_path)
+
+        # セキュリティチェック：data_dir以外へのアクセスを防ぐ
+        try:
+            # パスを正規化してディレクトリトラバーサル攻撃を防ぐ
+            normalized_data_dir = os.path.normpath(os.path.abspath(data_dir))
+            normalized_full_path = os.path.normpath(
+                os.path.abspath(full_path))
+
+            if not normalized_full_path.startswith(
+                    normalized_data_dir + os.sep):
+                return jsonify({'error': '不正なファイルパスです'}), 400
+        except (ValueError, OSError):
+            return jsonify({'error': '不正なファイルパスです'}), 400
+
+        # ディレクトリが存在しない場合は作成
+        os.makedirs(os.path.dirname(full_path), exist_ok=True)
+
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(data['content'])
+
+        # RAGシステムが利用可能な場合、インデックスを更新
+        if rag_system is not None:
+            try:
+                # ドキュメントハッシュを更新して、次回の初期化時に更新を検出
+                rag_system.document_hashes[full_path] = "updated"
+                rag_system._save_document_hashes()
+            except Exception as e:
+                logger.warning(f"ドキュメントハッシュの更新に失敗: {e}")
+
+        return jsonify({
+            'message': 'ファイルが保存されました',
+            'path': file_path,
+            'size': len(data['content'].encode('utf-8'))
+        })
+    except Exception as e:
+        logger.error(f"ファイル保存中にエラーが発生しました: {e}")
+        return jsonify({'error': f'ファイル保存に失敗しました: {str(e)}'}), 500
+
+
+@app.route('/api/files/<path:file_path>', methods=['DELETE'])
+def delete_file(file_path):
+    """ファイルを削除するエンドポイント"""
+    try:
+        # データディレクトリのパスを決定
+        data_dir = None
+        possible_paths = [
+            os.path.join(current_dir, 'data'),  # テスト環境用
+            os.path.join(current_dir, '..', '..', 'data'),  # 通常実行用
+        ]
+
+        for path in possible_paths:
+            if os.path.exists(path):
+                data_dir = path
+                break
+
+        if data_dir is None:
+            data_dir = possible_paths[0]
+
+        full_path = os.path.join(data_dir, file_path)
+
+        # セキュリティチェック：data_dir以外へのアクセスを防ぐ
+        try:
+            # パスを正規化してディレクトリトラバーサル攻撃を防ぐ
+            normalized_data_dir = os.path.normpath(os.path.abspath(data_dir))
+            normalized_full_path = os.path.normpath(
+                os.path.abspath(full_path))
+
+            if not normalized_full_path.startswith(
+                    normalized_data_dir + os.sep):
+                return jsonify({'error': '不正なファイルパスです'}), 400
+        except (ValueError, OSError):
+            return jsonify({'error': '不正なファイルパスです'}), 400
+
+        if not os.path.exists(full_path):
+            return jsonify({'error': 'ファイルが見つかりません'}), 404
+
+        os.remove(full_path)
+
+        # RAGシステムが利用可能な場合、ハッシュからも削除
+        if rag_system is not None:
+            try:
+                if full_path in rag_system.document_hashes:
+                    del rag_system.document_hashes[full_path]
+                    rag_system._save_document_hashes()
+            except Exception as e:
+                logger.warning(f"ドキュメントハッシュの削除に失敗: {e}")
+
+        return jsonify({'message': 'ファイルが削除されました'})
+    except Exception as e:
+        logger.error(f"ファイル削除中にエラーが発生しました: {e}")
+        return jsonify({'error': f'ファイル削除に失敗しました: {str(e)}'}), 500
+
+
+@app.route('/api/chunks/analyze/<path:file_path>', methods=['GET'])
+def analyze_chunks(file_path):
+    """ファイルのチャンク分析を実行するエンドポイント"""
+    try:
+        if rag_system is None:
+            return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
+
+        # データディレクトリのパスを決定
+        data_dir = None
+        possible_paths = [
+            os.path.join(current_dir, 'data'),  # テスト環境用
+            os.path.join(current_dir, '..', '..', 'data'),  # 通常実行用
+        ]
+
+        for path in possible_paths:
+            if os.path.exists(path):
+                data_dir = path
+                break
+
+        if data_dir is None:
+            data_dir = possible_paths[0]
+
+        full_path = os.path.join(data_dir, file_path)
+
+        # セキュリティチェック：data_dir以外へのアクセスを防ぐ
+        try:
+            # パスを正規化してディレクトリトラバーサル攻撃を防ぐ
+            normalized_data_dir = os.path.normpath(os.path.abspath(data_dir))
+            normalized_full_path = os.path.normpath(
+                os.path.abspath(full_path))
+
+            if not normalized_full_path.startswith(
+                    normalized_data_dir + os.sep):
+                return jsonify({'error': '不正なファイルパスです'}), 400
+        except (ValueError, OSError):
+            return jsonify({'error': '不正なファイルパスです'}), 400
+
+        if not os.path.exists(full_path):
+            return jsonify({'error': 'ファイルが見つかりません'}), 404
+
+        with open(full_path, 'r', encoding='utf-8') as f:
+            content = f.read()
+
+        # Markdownをパースしてセクションに分割
+        sections = rag_system._parse_markdown(content)
+
+        # ノードを生成
+        nodes = rag_system._create_nodes_from_sections(sections, full_path)
+
+        # 結果を整理
+        chunks = []
+        header_count = 0
+        content_count = 0
+
+        for node in nodes:
+            chunk_info = {
+                'type': node.metadata.get('type', ''),
+                'text': node.text,
+                'metadata': {
+                    'header': node.metadata.get('header', ''),
+                    'level': node.metadata.get('level', 1),
+                    'section_id': node.metadata.get('section_id', 0),
+                    'folder_name': node.metadata.get('folder_name', ''),
+                    'file_name': node.metadata.get('file_name', ''),
+                },
+                'text_length': len(node.text),
+                'preview': (
+                    node.text[:100] +
+                    ('...' if len(node.text) > 100 else '')
+                )
+            }
+            chunks.append(chunk_info)
+
+            if chunk_info['type'] == 'header':
+                header_count += 1
+            else:
+                content_count += 1
+
+        return jsonify({
+            'file_path': file_path,
+            'total_chunks': len(chunks),
+            'header_chunks': header_count,
+            'content_chunks': content_count,
+            'chunks': chunks
+        })
+    except Exception as e:
+        logger.error(f"チャンク分析中にエラーが発生しました: {e}")
+        return jsonify({'error': f'チャンク分析に失敗しました: {str(e)}'}), 500
+
+
+@app.route('/api/index/refresh', methods=['POST'])
+def refresh_index():
+    """インデックスを強制的に更新するエンドポイント"""
+    try:
+        if rag_system is None:
+            return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
+
+        # インデックスを再構築
+        rag_system.index = rag_system._create_new_index()
+
+        return jsonify({'message': 'インデックスが更新されました'})
+    except Exception as e:
+        logger.error(f"インデックス更新中にエラーが発生しました: {e}")
+        return jsonify({'error': f'インデックス更新に失敗しました: {str(e)}'}), 500
 
 
 if __name__ == '__main__':

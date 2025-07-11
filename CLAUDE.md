@@ -74,6 +74,7 @@ personal_rag/
 
 ### テストとデバッグ
 
+- uv run pytest --cov=src --cov-report=html
 - サーバーログは標準出力に表示
 - ブラウザの開発者ツールでフロントエンドデバッグ
 - `http://localhost:5000`でローカルテスト
