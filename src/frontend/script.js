@@ -7,6 +7,7 @@ class RAGInterface {
         this.baseUrl = window.location.origin;
         this.todos = [];
         this.currentTab = 'search';
+        this.lastSearchResult = null; // 最後の検索結果を保存
         this.initializeTabs();
     }
 
@@ -39,10 +40,10 @@ class RAGInterface {
         this.todoList = document.getElementById('todoList');
 
         // エディタ要素
-        this.fileSelect = document.getElementById('fileSelect');
+        this.fileTree = document.getElementById('fileTree');
         this.newFileBtn = document.getElementById('newFileBtn');
         this.saveFileBtn = document.getElementById('saveFileBtn');
-        this.deleteFileBtn = document.getElementById('deleteFileBtn');
+        this.popoutEditorBtn = document.getElementById('popoutEditorBtn');
         this.currentFilePath = document.getElementById('currentFilePath');
         this.fileStatus = document.getElementById('fileStatus');
         this.markdownEditor = document.getElementById('markdownEditor');
@@ -81,10 +82,9 @@ class RAGInterface {
         });
 
         // エディタイベント
-        this.fileSelect.addEventListener('change', () => this.loadSelectedFile());
         this.newFileBtn.addEventListener('click', () => this.createNewFile());
         this.saveFileBtn.addEventListener('click', () => this.saveCurrentFile());
-        this.deleteFileBtn.addEventListener('click', () => this.deleteCurrentFile());
+        this.popoutEditorBtn.addEventListener('click', () => this.popoutEditor());
         this.markdownEditor.addEventListener('input', () => this.updatePreview());
         this.toolbarBtns.forEach(btn => {
             btn.addEventListener('click', (e) => this.handleToolbarAction(e.target.dataset.action));
@@ -146,6 +146,8 @@ class RAGInterface {
     }
 
     displayResults(result) {
+        // 検索結果を保存
+        this.lastSearchResult = result;
         this.displayAnswer(result.answer);
         this.displaySources(result.sources);
         this.showResults();
@@ -193,46 +195,9 @@ class RAGInterface {
             content.className = 'source-content';
             content.textContent = source.content;
 
-            // ファイル情報を整理 - 改善版
-            let fileInfo = '';
-
-            // 1. folder_nameとfile_nameの組み合わせを試す
-            if (source.folder_name && source.file_name) {
-                const folderName = source.folder_name.trim();
-                const fileName = source.file_name.trim();
-                if (folderName && fileName) {
-                    fileInfo = `${folderName}/${fileName}`;
-                }
-            }
-
-            // 2. file_nameのみの場合
-            if (!fileInfo && source.file_name) {
-                const fileName = source.file_name.trim();
-                if (fileName) {
-                    fileInfo = fileName;
-                }
-            }
-
-            // 3. doc_idから抽出を試す
-            if (!fileInfo && source.doc_id) {
-                const docId = source.doc_id.trim();
-                if (docId) {
-                    // doc_idがファイルパスの場合、ファイル名を抽出
-                    const pathParts = docId.split(/[/\\]/);
-                    const fileName = pathParts[pathParts.length - 1];
-                    if (fileName && fileName.includes('.')) {
-                        // 拡張子を除去
-                        fileInfo = fileName.replace(/\.[^/.]+$/, '');
-                    } else {
-                        fileInfo = docId;
-                    }
-                }
-            }
-
-            // 4. デフォルト値
-            if (!fileInfo) {
-                fileInfo = 'unknown';
-            }
+            // ファイル情報を整理 - バックエンドとの整合性を保つ
+            const filePath = source.doc_id || '';
+            const fileDisplayName = this.getFileNameFromPath(filePath);
 
             // スコアの表示を改善
             const score = source.score || 0;
@@ -241,8 +206,9 @@ class RAGInterface {
 
             const meta = document.createElement('div');
             meta.className = 'source-meta';
+
             meta.innerHTML = `
-                📁 ${fileInfo} | 
+                📁 <a href="#" class="source-link" data-file-path="${filePath}" onclick="ragInterface.openFileInEditor('${filePath}', event)">${fileDisplayName}</a> | 
                 🎯 関連度: ${scoreDisplay} | 
                 📊 レベル: H${source.level || 1}
             `;
@@ -378,6 +344,10 @@ class RAGInterface {
             case 'search':
                 this.searchTab.classList.add('active');
                 this.currentTab = 'search';
+                // 最後の検索結果を復元
+                if (this.lastSearchResult) {
+                    this.displayResults(this.lastSearchResult);
+                }
                 break;
             case 'todos':
                 this.todosTab.classList.add('active');
@@ -544,12 +514,16 @@ class RAGInterface {
                     <div class="todo-meta">
                         <span class="status-badge ${todo.status}">${this.getStatusText(todo.status)}</span>
                         <span class="priority-badge ${todo.priority}">${this.getPriorityText(todo.priority)}</span>
-                        <span>ソース: ${todo.source_file} > ${todo.source_section}</span>
+                        <span>ソース: <a href="#" class="source-link" data-file-path="${todo.source_file}" onclick="ragInterface.openFileInEditor('${todo.source_file}', event)">${this.getFileNameFromPath(todo.source_file)}</a> > ${todo.source_section}</span>
                         <span>作成: ${new Date(todo.created_at).toLocaleString('ja-JP')}</span>
                     </div>
                 </div>
                 <div class="todo-actions">
-                    <button class="todo-action-btn edit-btn" onclick="ragInterface.editTodo('${todo.id}')">Edit</button>
+                    <select class="priority-change-select" onchange="ragInterface.changeTodoPriority('${todo.id}', this.value)">
+                        <option value="low" ${todo.priority === 'low' ? 'selected' : ''}>低</option>
+                        <option value="medium" ${todo.priority === 'medium' ? 'selected' : ''}>中</option>
+                        <option value="high" ${todo.priority === 'high' ? 'selected' : ''}>高</option>
+                    </select>
                     <button class="todo-action-btn delete-btn" onclick="ragInterface.deleteTodo('${todo.id}')">Delete</button>
                 </div>
             `;
@@ -566,13 +540,12 @@ class RAGInterface {
         await this.updateTodo(todoId, { status: newStatus });
     }
 
-    editTodo(todoId) {
+    async changeTodoPriority(todoId, newPriority) {
         const todo = this.todos.find(t => t.id === todoId);
         if (!todo) return;
 
-        const newContent = prompt('TODOを編集:', todo.content);
-        if (newContent && newContent.trim() !== todo.content) {
-            this.updateTodo(todoId, { content: newContent.trim() });
+        if (newPriority !== todo.priority) {
+            await this.updateTodo(todoId, { priority: newPriority });
         }
     }
 
@@ -594,6 +567,22 @@ class RAGInterface {
         return priorityMap[priority] || priority;
     }
 
+    getFileNameFromPath(filePath) {
+        if (!filePath) return '';
+        const parts = filePath.split(/[/\\]/);
+        return parts[parts.length - 1] || filePath;
+    }
+
+    openFileInEditor(filePath, event) {
+        event.preventDefault();
+
+        // エディタタブに切り替え
+        this.switchTab('editor');
+
+        // ファイルを選択
+        this.selectFile(filePath);
+    }
+
     showTodoLoading() {
         this.todoLoadingIndicator.style.display = 'block';
     }
@@ -612,7 +601,7 @@ class RAGInterface {
                 throw new Error(data.error);
             }
 
-            this.populateFileSelect(data.files);
+            this.populateFileTree(data.files);
             this.populateChunkFileSelect(data.files);
         } catch (error) {
             console.error('ファイル一覧の読み込みに失敗:', error);
@@ -620,13 +609,51 @@ class RAGInterface {
         }
     }
 
-    populateFileSelect(files) {
-        this.fileSelect.innerHTML = '<option value="">ファイルを選択...</option>';
+    populateFileTree(files) {
+        this.fileTree.innerHTML = '';
+
+        if (!files || files.length === 0) {
+            this.fileTree.innerHTML = '<div class="no-files">ファイルが見つかりません</div>';
+            return;
+        }
+
+        // フォルダ別にファイルを整理
+        const folders = {};
         files.forEach(file => {
-            const option = document.createElement('option');
-            option.value = file.path;
-            option.textContent = `${file.folder}/${file.name} (${this.formatFileSize(file.size)})`;
-            this.fileSelect.appendChild(option);
+            const folder = file.folder || 'その他';
+            if (!folders[folder]) {
+                folders[folder] = [];
+            }
+            folders[folder].push(file);
+        });
+
+        // フォルダとファイルを表示
+        Object.keys(folders).sort().forEach(folderName => {
+            const folderDiv = document.createElement('div');
+            folderDiv.className = 'file-folder';
+
+            const folderHeader = document.createElement('div');
+            folderHeader.className = 'folder-header';
+            folderHeader.innerHTML = `<span class="folder-icon">📁</span> ${folderName}`;
+
+            const filesList = document.createElement('div');
+            filesList.className = 'files-list';
+
+            folders[folderName].forEach(file => {
+                const fileItem = document.createElement('div');
+                fileItem.className = 'file-item';
+                fileItem.innerHTML = `
+                    <span class="file-icon">📄</span>
+                    <span class="file-name">${file.name}</span>
+                    <span class="file-size">${this.formatFileSize(file.size)}</span>
+                `;
+                fileItem.addEventListener('click', () => this.selectFile(file.path));
+                filesList.appendChild(fileItem);
+            });
+
+            folderDiv.appendChild(folderHeader);
+            folderDiv.appendChild(filesList);
+            this.fileTree.appendChild(folderDiv);
         });
     }
 
@@ -648,8 +675,23 @@ class RAGInterface {
         return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
     }
 
+    selectFile(filePath) {
+        this.selectedFilePath = filePath;
+        this.loadSelectedFile();
+
+        // 選択されたファイルをハイライト
+        const fileItems = this.fileTree.querySelectorAll('.file-item');
+        fileItems.forEach(item => item.classList.remove('selected'));
+        const selectedItem = Array.from(fileItems).find(item =>
+            item.querySelector('.file-name').textContent === this.getFileNameFromPath(filePath)
+        );
+        if (selectedItem) {
+            selectedItem.classList.add('selected');
+        }
+    }
+
     async loadSelectedFile() {
-        const filePath = this.fileSelect.value;
+        const filePath = this.selectedFilePath;
         if (!filePath) {
             this.clearEditor();
             return;
@@ -668,7 +710,6 @@ class RAGInterface {
             this.currentFilePath.textContent = data.path;
             this.updatePreview();
             this.saveFileBtn.disabled = false;
-            this.deleteFileBtn.disabled = false;
             this.setFileStatus(`読み込み完了 (${this.formatFileSize(data.size)})`, 'success');
         } catch (error) {
             console.error('ファイル読み込みエラー:', error);
@@ -681,7 +722,12 @@ class RAGInterface {
         this.previewContent.innerHTML = 'ここにプレビューが表示されます';
         this.currentFilePath.textContent = 'ファイルが選択されていません';
         this.saveFileBtn.disabled = true;
-        this.deleteFileBtn.disabled = true;
+        this.selectedFilePath = null;
+
+        // ファイル選択をクリア
+        const fileItems = this.fileTree.querySelectorAll('.file-item');
+        fileItems.forEach(item => item.classList.remove('selected'));
+
         this.setFileStatus('', '');
     }
 
@@ -710,7 +756,7 @@ class RAGInterface {
     }
 
     async saveCurrentFile() {
-        const filePath = this.fileSelect.value;
+        const filePath = this.selectedFilePath;
         if (!filePath) {
             alert('ファイルが選択されていません');
             return;
@@ -734,6 +780,9 @@ class RAGInterface {
             }
 
             this.setFileStatus(`保存完了 (${this.formatFileSize(data.size)})`, 'success');
+
+            // ファイルツリーを更新
+            this.loadFileList();
         } catch (error) {
             console.error('ファイル保存エラー:', error);
             this.setFileStatus(`保存エラー: ${error.message}`, 'error');
@@ -748,49 +797,21 @@ class RAGInterface {
         const fullFileName = fileName.endsWith('.md') ? fileName : fileName + '.md';
 
         // フォルダの指定があるかチェック
-        const filePath = fullFileName.includes('/') ? fullFileName : `${fullFileName}`;
+        const filePath = fullFileName.includes('/') ? fullFileName : `data/${fullFileName}`;
 
-        this.fileSelect.value = '';
+        this.selectedFilePath = filePath;
         this.markdownEditor.value = `# ${fileName.replace('.md', '')}\n\n`;
         this.currentFilePath.textContent = filePath;
         this.updatePreview();
         this.saveFileBtn.disabled = false;
-        this.deleteFileBtn.disabled = true; // 新規ファイルは削除不可
         this.setFileStatus('新規ファイル（未保存）', 'warning');
 
-        // ファイル選択リストに追加
-        const option = document.createElement('option');
-        option.value = filePath;
-        option.textContent = filePath;
-        option.selected = true;
-        this.fileSelect.appendChild(option);
+        // ファイル選択をクリア
+        const fileItems = this.fileTree.querySelectorAll('.file-item');
+        fileItems.forEach(item => item.classList.remove('selected'));
     }
 
-    async deleteCurrentFile() {
-        const filePath = this.fileSelect.value;
-        if (!filePath) return;
 
-        if (!confirm(`ファイル "${filePath}" を削除しますか？`)) return;
-
-        try {
-            this.setFileStatus('削除中...', 'loading');
-            const response = await fetch(`${this.baseUrl}/api/files/${encodeURIComponent(filePath)}`, {
-                method: 'DELETE'
-            });
-
-            const data = await response.json();
-            if (data.error) {
-                throw new Error(data.error);
-            }
-
-            this.clearEditor();
-            this.loadFileList(); // リストを再読み込み
-            this.setFileStatus('削除完了', 'success');
-        } catch (error) {
-            console.error('ファイル削除エラー:', error);
-            this.setFileStatus(`削除エラー: ${error.message}`, 'error');
-        }
-    }
 
     handleToolbarAction(action) {
         const textarea = this.markdownEditor;
@@ -826,6 +847,176 @@ class RAGInterface {
     setFileStatus(message, type) {
         this.fileStatus.textContent = message;
         this.fileStatus.className = `file-status ${type}`;
+    }
+
+    popoutEditor() {
+        const currentContent = this.markdownEditor.value;
+        const currentFilePath = this.selectedFilePath || 'untitled.md';
+        const fileName = this.getFileNameFromPath(currentFilePath);
+
+        // 新しいウィンドウを開く
+        const popupWindow = window.open('', `editor_${Date.now()}`,
+            'width=1200,height=800,scrollbars=yes,resizable=yes,toolbar=no,menubar=no,location=no,status=no');
+
+        if (!popupWindow) {
+            alert('ポップアップがブロックされました。ブラウザの設定でポップアップを許可してください。');
+            return;
+        }
+
+        // ポップアウトウィンドウのHTML
+        popupWindow.document.write(`
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>メモエディタ - ${fileName}</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: #f5f5f5;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+        
+        .editor-header {
+            background: #2c3e50;
+            color: white;
+            padding: 15px 20px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        }
+        
+        .editor-title {
+            font-size: 18px;
+            font-weight: 500;
+        }
+        
+        .editor-controls {
+            display: flex;
+            gap: 10px;
+        }
+        
+        .control-btn {
+            background: #3498db;
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background-color 0.3s;
+        }
+        
+        .control-btn:hover {
+            background: #2980b9;
+        }
+        
+        .control-btn:disabled {
+            background: #95a5a6;
+            cursor: not-allowed;
+        }
+        
+                 .editor-container {
+             flex: 1;
+             display: flex;
+             flex-direction: column;
+             height: calc(100vh - 70px);
+         }
+         
+         .pane-header {
+             background: #34495e;
+             color: white;
+             padding: 10px 15px;
+             font-weight: 500;
+             font-size: 14px;
+         }
+         
+         .editor-textarea {
+             flex: 1;
+             border: none;
+             padding: 20px;
+             font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
+             font-size: 14px;
+             line-height: 1.6;
+             resize: none;
+             outline: none;
+             background: white;
+         }
+        
+        .status-bar {
+            background: #ecf0f1;
+            padding: 5px 15px;
+            font-size: 12px;
+            color: #7f8c8d;
+            border-top: 1px solid #ddd;
+        }
+    </style>
+</head>
+<body>
+    <div class="editor-header">
+        <div class="editor-title">📝 ${fileName}</div>
+        <div class="editor-controls">
+            <button class="control-btn" onclick="saveToParent()">保存</button>
+            <button class="control-btn" onclick="window.close()">閉じる</button>
+        </div>
+    </div>
+    
+         <div class="editor-container">
+         <div class="pane-header">✏️ エディタ</div>
+         <textarea class="editor-textarea" id="popupEditor" placeholder="Markdownを入力してください...">${currentContent}</textarea>
+     </div>
+    
+    <div class="status-bar">
+        <span id="statusText">準備完了</span>
+    </div>
+
+         <script>
+         const editor = document.getElementById('popupEditor');
+         const statusText = document.getElementById('statusText');
+         
+         function saveToParent() {
+             if (window.opener && !window.opener.closed) {
+                 // 親ウィンドウのエディタに内容を同期
+                 window.opener.ragInterface.markdownEditor.value = editor.value;
+                 window.opener.ragInterface.updatePreview();
+                 statusText.textContent = '保存しました';
+                 setTimeout(() => {
+                     statusText.textContent = '準備完了';
+                 }, 2000);
+             } else {
+                 alert('親ウィンドウが見つかりません');
+             }
+         }
+         
+         // 親ウィンドウとの同期
+         setInterval(() => {
+             if (window.opener && !window.opener.closed) {
+                 const parentContent = window.opener.ragInterface.markdownEditor.value;
+                 if (parentContent !== editor.value) {
+                     editor.value = parentContent;
+                 }
+             }
+         }, 1000);
+         
+         // ウィンドウが閉じられる前に確認
+         window.addEventListener('beforeunload', (e) => {
+             if (window.opener && !window.opener.closed) {
+                 saveToParent();
+             }
+         });
+     </script>
+</body>
+</html>
+        `);
+
+        popupWindow.document.close();
+        popupWindow.focus();
     }
 
     // チャンク可視化機能

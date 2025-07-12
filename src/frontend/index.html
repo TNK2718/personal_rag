@@ -98,16 +98,20 @@
             <div class="editor-section">
                 <div class="editor-controls">
                     <div class="file-controls">
-                        <select id="fileSelect" class="file-select">
-                            <option value="">ファイルを選択...</option>
-                        </select>
                         <button id="newFileBtn" class="new-file-btn">新規ファイル</button>
                         <button id="saveFileBtn" class="save-file-btn" disabled>保存</button>
-                        <button id="deleteFileBtn" class="delete-file-btn" disabled>削除</button>
+                        <button id="popoutEditorBtn" class="popout-btn">別ウィンドウで開く</button>
                     </div>
                     <div class="file-info" id="fileInfo">
                         <span id="currentFilePath">ファイルが選択されていません</span>
                         <span id="fileStatus"></span>
+                    </div>
+                </div>
+
+                <div class="file-explorer">
+                    <h3>📁 メモファイル</h3>
+                    <div id="fileTree" class="file-tree">
+                        <div class="loading-files">ファイルを読み込み中...</div>
                     </div>
                 </div>
 

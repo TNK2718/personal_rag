@@ -131,7 +131,36 @@ class RAGSystem:
         with open(file_path, 'rb') as f:
             return hashlib.md5(f.read()).hexdigest()
 
-    def _extract_todos_from_text(self, text: str, source_file: str, source_section: str) -> List[TodoItem]:
+    def _get_relative_path(self, file_path: str) -> str:
+        """フルパスを相対パス（dataディレクトリ基準）に変換する"""
+        if not file_path:
+            return file_path
+
+        # dataディレクトリ基準の相対パスを取得
+        try:
+            # dataディレクトリの絶対パスを取得
+            abs_data_dir = os.path.abspath(self.data_dir)
+            abs_file_path = os.path.abspath(file_path)
+
+            # dataディレクトリ内のファイルかチェック
+            if abs_file_path.startswith(abs_data_dir):
+                rel_path = os.path.relpath(abs_file_path, abs_data_dir)
+                # Windowsのバックスラッシュをスラッシュに変換
+                rel_path = rel_path.replace(os.sep, '/')
+                print(f"[DEBUG] Path conversion: {file_path} -> {rel_path}")
+                return rel_path
+        except (ValueError, TypeError) as e:
+            print(f"[DEBUG] Path conversion error: {e}")
+            pass
+
+        # フォールバック: ファイル名のみを返す
+        fallback = os.path.basename(file_path)
+        print(f"[DEBUG] Path conversion fallback: {file_path} -> {fallback}")
+        return fallback
+
+    def _extract_todos_from_text(
+        self, text: str, source_file: str, source_section: str
+    ) -> List[TodoItem]:
         """テキストからTODO項目を抽出する"""
         todos = []
 
@@ -156,14 +185,17 @@ class RAGSystem:
                 if content and len(content) > 3:  # 短すぎるものは除外
                     # 優先度を推定
                     priority = "medium"
-                    if any(word in content.lower() for word in ['urgent', '急', '緊急', 'asap']):
+                    urgent_words = ['urgent', '急', '緊急', 'asap']
+                    later_words = ['later', '後で', '将来']
+                    if any(word in content.lower() for word in urgent_words):
                         priority = "high"
-                    elif any(word in content.lower() for word in ['later', '後で', '将来']):
+                    elif any(word in content.lower() for word in later_words):
                         priority = "low"
 
                     # IDを生成
+                    source_key = f"{source_file}:{source_section}:{content}"
                     todo_id = hashlib.md5(
-                        f"{source_file}:{source_section}:{content}".encode()).hexdigest()[:8]
+                        source_key.encode()).hexdigest()[:8]
 
                     todo = TodoItem(
                         id=todo_id,
@@ -633,9 +665,15 @@ class RAGSystem:
             print("[DEBUG] 最終選択されたノード:")
             for i, node in enumerate(nodes):
                 doc_id = node.metadata.get("doc_id", "unknown")
+                file_name = node.metadata.get("file_name", "no file_name")
+                folder_name = node.metadata.get(
+                    "folder_name", "no folder_name")
                 header = node.metadata.get("header", "no header")
                 score = node.score or 0.0
-                print(f"  {i+1}. {doc_id} - {header} (score: {score:.3f})")
+                print(f"  {i+1}. doc_id={doc_id}")
+                print(f"       file_name={file_name}")
+                print(f"       folder_name={folder_name}")
+                print(f"       header={header} (score: {score:.3f})")
 
             print("[DEBUG] QueryEngine作成開始")
             query_engine = self.index.as_query_engine(
@@ -660,13 +698,20 @@ class RAGSystem:
                 print("[WARNING] 空の回答が生成されました")
                 answer = "申し訳ございませんが、適切な回答を生成できませんでした。"
 
-            # ソース情報を整理
+                # ソース情報を整理
             sources = []
             for node in nodes:
+                doc_id = node.metadata.get("doc_id", "")
+                relative_path = self._get_relative_path(doc_id)
+
+                print("[DEBUG] Source path conversion:")
+                print(f"  Original doc_id: {doc_id}")
+                print(f"  Relative path: {relative_path}")
+
                 sources.append({
                     "header": node.metadata.get("header", ""),
                     "content": node.text,
-                    "doc_id": node.metadata.get("doc_id", ""),
+                    "doc_id": relative_path,  # 相対パスを使用
                     "file_name": node.metadata.get("file_name", ""),
                     "folder_name": node.metadata.get("folder_name", ""),
                     "section_id": node.metadata.get("section_id", 0),
@@ -766,11 +811,14 @@ class RAGSystem:
             return [todo for todo in self.todos if todo.status == status]
         return self.todos
 
-    def add_todo(self, content: str, priority: str = "medium", source_file: str = "manual", source_section: str = "manual") -> TodoItem:
+    def add_todo(
+        self, content: str, priority: str = "medium",
+        source_file: str = "manual", source_section: str = "manual"
+    ) -> TodoItem:
         """TODO項目を手動で追加する"""
         current_time = datetime.now().isoformat()
-        todo_id = hashlib.md5(
-            f"{source_file}:{source_section}:{content}:{current_time}".encode()).hexdigest()[:8]
+        source_key = f"{source_file}:{source_section}:{content}:{current_time}"
+        todo_id = hashlib.md5(source_key.encode()).hexdigest()[:8]
 
         todo = TodoItem(
             id=todo_id,
@@ -838,10 +886,9 @@ class RAGSystem:
 
     def extract_todos_from_documents(self) -> int:
         """全てのドキュメントからTODOを再抽出する"""
-        initial_count = len(self.todos)
-
-        # 既存のTODOをクリアして再抽出
-        self.todos = []
+        # 既存のTODOのIDセットを作成
+        existing_todo_ids = {todo.id for todo in self.todos}
+        new_todos = []
 
         for root, _, files in os.walk(self.data_dir):
             for file in files:
@@ -852,13 +899,22 @@ class RAGSystem:
                             content = f.read()
                             sections = self._parse_markdown(content)
 
+                            # フルパスを相対パスに変換
+                            relative_path = self._get_relative_path(file_path)
+
                             for section in sections:
                                 todos = self._extract_todos_from_text(
-                                    section.content, file_path, section.header
+                                    section.content, relative_path, section.header
                                 )
-                                self.todos.extend(todos)
+                                # 重複していないTODOのみを追加
+                                for todo in todos:
+                                    if todo.id not in existing_todo_ids:
+                                        new_todos.append(todo)
+                                        existing_todo_ids.add(todo.id)
                     except Exception as e:
                         print(f"Error processing {file_path}: {e}")
 
+        # 新しいTODOのみを追加
+        self.todos.extend(new_todos)
         self._save_todos()
-        return len(self.todos) - initial_count
+        return len(new_todos)
