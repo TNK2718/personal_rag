@@ -193,21 +193,57 @@ class RAGInterface {
             content.className = 'source-content';
             content.textContent = source.content;
 
-            // ファイル情報を整理
-            const filePath = [];
-            if (source.folder_name) {
-                filePath.push(source.folder_name);
+            // ファイル情報を整理 - 改善版
+            let fileInfo = '';
+
+            // 1. folder_nameとfile_nameの組み合わせを試す
+            if (source.folder_name && source.file_name) {
+                const folderName = source.folder_name.trim();
+                const fileName = source.file_name.trim();
+                if (folderName && fileName) {
+                    fileInfo = `${folderName}/${fileName}`;
+                }
             }
-            if (source.file_name) {
-                filePath.push(source.file_name);
+
+            // 2. file_nameのみの場合
+            if (!fileInfo && source.file_name) {
+                const fileName = source.file_name.trim();
+                if (fileName) {
+                    fileInfo = fileName;
+                }
             }
-            const fileInfo = filePath.length > 0 ? filePath.join('/') : (source.doc_id || 'unknown');
+
+            // 3. doc_idから抽出を試す
+            if (!fileInfo && source.doc_id) {
+                const docId = source.doc_id.trim();
+                if (docId) {
+                    // doc_idがファイルパスの場合、ファイル名を抽出
+                    const pathParts = docId.split(/[/\\]/);
+                    const fileName = pathParts[pathParts.length - 1];
+                    if (fileName && fileName.includes('.')) {
+                        // 拡張子を除去
+                        fileInfo = fileName.replace(/\.[^/.]+$/, '');
+                    } else {
+                        fileInfo = docId;
+                    }
+                }
+            }
+
+            // 4. デフォルト値
+            if (!fileInfo) {
+                fileInfo = 'unknown';
+            }
+
+            // スコアの表示を改善
+            const score = source.score || 0;
+            const scorePercentage = (score * 100).toFixed(1);
+            const scoreDisplay = score > 0 ? `${scorePercentage}%` : 'N/A';
 
             const meta = document.createElement('div');
             meta.className = 'source-meta';
             meta.innerHTML = `
                 📁 ${fileInfo} | 
-                🎯 関連度: ${((source.score || 0) * 100).toFixed(1)}% | 
+                🎯 関連度: ${scoreDisplay} | 
                 📊 レベル: H${source.level || 1}
             `;
 

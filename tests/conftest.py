@@ -136,12 +136,6 @@ def mock_rag_system(temp_dir):
                 result[date_key].append(todo)
             return result
 
-        def query(self, query_text):
-            return {
-                'answer': f'モック回答: {query_text}',
-                'sources': []
-            }
-
         def extract_todos_from_documents(self):
             return 0
 
@@ -155,7 +149,6 @@ def mock_rag_system(temp_dir):
             get_overdue_todos, rag_system)
         rag_system.aggregate_todos_by_date = MethodType(
             aggregate_todos_by_date, rag_system)
-        rag_system.query = MethodType(query, rag_system)
         rag_system.extract_todos_from_documents = MethodType(
             extract_todos_from_documents, rag_system)
 
@@ -185,13 +178,11 @@ def mock_rag_system(temp_dir):
             return real_rag._split_text_by_length.__func__(
                 self, text, chunk_size, overlap)
 
-        def _calculate_content_diversity(self, selected_nodes, candidate_node, lambda_param=0.5):
-            return real_rag._calculate_content_diversity.__func__(
-                self, selected_nodes, candidate_node, lambda_param)
+        def query(self, query_text):
+            return real_rag.query.__func__(self, query_text)
 
-        def _select_diverse_nodes(self, nodes, target_count=3, lambda_param=0.7):
-            return real_rag._select_diverse_nodes.__func__(
-                self, nodes, target_count, lambda_param)
+        def run_interactive(self):
+            return real_rag.run_interactive.__func__(self)
 
         rag_system._parse_markdown = MethodType(_parse_markdown, rag_system)
         rag_system._extract_todos_from_text = MethodType(
@@ -206,10 +197,8 @@ def mock_rag_system(temp_dir):
         # 新しいメソッドのバインド
         rag_system._split_text_by_length = MethodType(
             _split_text_by_length, rag_system)
-        rag_system._calculate_content_diversity = MethodType(
-            _calculate_content_diversity, rag_system)
-        rag_system._select_diverse_nodes = MethodType(
-            _select_diverse_nodes, rag_system)
+        rag_system.query = MethodType(query, rag_system)
+        rag_system.run_interactive = MethodType(run_interactive, rag_system)
 
         return rag_system
 

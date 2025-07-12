@@ -204,7 +204,7 @@ class RAGSystem:
         overlap: int = DEFAULT_CHUNK_OVERLAP
     ) -> List[str]:
         """
-        テキストを指定された文字数で分割する
+        テキストを指定された文字数で分割する（無限ループ防止機能付き）
 
         Args:
             text: 分割するテキスト
@@ -219,13 +219,20 @@ class RAGSystem:
 
         chunks = []
         start = 0
+        # 無限ループ防止：最大反復回数を計算
+        step_size = max(1, chunk_size - overlap)
+        max_iterations = len(text) // step_size + 10
 
-        while start < len(text):
+        iteration_count = 0
+        while start < len(text) and iteration_count < max_iterations:
+            iteration_count += 1
             end = start + chunk_size
 
             # テキストの終端を超えないように調整
             if end >= len(text):
-                chunks.append(text[start:])
+                remaining_text = text[start:].strip()
+                if remaining_text:
+                    chunks.append(remaining_text)
                 break
 
             # 文の境界で切るための調整（句読点を探す）
@@ -238,18 +245,26 @@ class RAGSystem:
                     sentence_ends.append(start + i + 1)
 
             # 句読点が見つかった場合、最後の句読点で切る
-            if sentence_ends and sentence_ends[-1] < start + chunk_size:
+            if sentence_ends:
                 actual_end = sentence_ends[-1]
                 chunks.append(text[start:actual_end])
-                start = actual_end - overlap
+                new_start = actual_end - overlap
             else:
                 # 句読点が見つからない場合、指定サイズで切る
                 chunks.append(text[start:end])
-                start = end - overlap
+                new_start = end - overlap
 
-            # 重複を避けるため、startが負数にならないように調整
-            if start < 0:
-                start = 0
+            # 無限ループ防止：startが進まない場合は強制的に進める
+            if new_start <= start:
+                new_start = start + max(1, chunk_size // 2)
+
+            start = max(0, new_start)
+
+        # 無限ループが発生した場合の警告
+        if iteration_count >= max_iterations:
+            msg = "[WARNING] sentence boundary chunking 最大反復回数に達しました。"
+            msg += f"テキスト長: {len(text)}"
+            print(msg)
 
         # 空のチャンクを除去
         return [chunk.strip() for chunk in chunks if chunk.strip()]
@@ -573,9 +588,9 @@ class RAGSystem:
         try:
             print(f"[DEBUG] クエリ開始: {query_text}")
 
-            # より多くの候補を取得して多様性を確保
+            # 候補を取得
             retriever = self.index.as_retriever(
-                similarity_top_k=10  # 多めに取得して後でフィルタリング
+                similarity_top_k=10
             )
             print("[DEBUG] Retriever作成完了")
 
@@ -583,6 +598,14 @@ class RAGSystem:
             all_retrieved_nodes = retriever.retrieve(query_text)
             retrieved_count = len(all_retrieved_nodes)
             print(f"[DEBUG] 検索結果: {retrieved_count}個のノードを取得")
+
+            # 初期スコアランキングを表示
+            print("[DEBUG] 初期スコアランキング:")
+            for i, node in enumerate(all_retrieved_nodes[:5]):
+                doc_id = node.metadata.get("doc_id", "unknown")
+                header = node.metadata.get("header", "no header")
+                score = node.score or 0.0
+                print(f"  {i+1}. {doc_id} - {header} (score: {score:.3f})")
 
             # 重複する文書IDとセクションIDの組み合わせを排除
             unique_nodes = []
@@ -597,23 +620,30 @@ class RAGSystem:
                     unique_nodes.append(node)
                     seen_sections.add(key)
 
-                # 異なる文書から8つまでに制限
+                # 上位8つまでに制限
                 if len(unique_nodes) >= 8:
                     break
 
-            # 多様性を考慮してノードを選択
-            nodes = self._select_diverse_nodes(unique_nodes, target_count=3)
+            print(f"[DEBUG] 重複排除後: {len(unique_nodes)}個のユニークノード")
 
-            print(f"[DEBUG] ノード重複除去完了: {len(nodes)}個のユニークノード")
+            # シンプルに関連性順で上位3つを選択
+            nodes = unique_nodes[:3]
+            print(f"[DEBUG] 関連性順選択: {len(nodes)}個のノード")
+
+            print("[DEBUG] 最終選択されたノード:")
+            for i, node in enumerate(nodes):
+                doc_id = node.metadata.get("doc_id", "unknown")
+                header = node.metadata.get("header", "no header")
+                score = node.score or 0.0
+                print(f"  {i+1}. {doc_id} - {header} (score: {score:.3f})")
 
             print("[DEBUG] QueryEngine作成開始")
             query_engine = self.index.as_query_engine(
-                similarity_top_k=10,  # Retrieverと同じ値に設定
+                similarity_top_k=10,
                 system_prompt="""あなたは親切なアシスタントです。
 与えられた文脈に基づいて、日本語で簡潔に回答してください。
 特に、ヘッダー情報を参考にして、文書の構造を意識した回答を心がけてください。
-関連するヘッダーがある場合は、その情報も含めて回答してください。
-複数の異なる観点から情報を統合して、包括的な回答を提供してください。"""
+関連するヘッダーがある場合は、その情報も含めて回答してください。"""
             )
             print("[DEBUG] QueryEngine作成完了")
 
@@ -682,7 +712,7 @@ class RAGSystem:
 
             print("\n回答:")
 
-            # 改善されたクエリエンジンを使用
+            # シンプルなクエリエンジンを使用
             retriever = self.index.as_retriever(
                 similarity_top_k=10
             )
@@ -704,10 +734,8 @@ class RAGSystem:
                 if len(unique_nodes) >= 8:
                     break
 
-            # 多様性を考慮してノードを選択
-            selected_nodes = self._select_diverse_nodes(
-                unique_nodes, target_count=3
-            )
+            # 関連性順で上位3つを選択
+            selected_nodes = unique_nodes[:3]
 
             query_engine = self.index.as_query_engine(
                 similarity_top_k=10,
@@ -715,7 +743,6 @@ class RAGSystem:
 与えられた文脈に基づいて、日本語で簡潔に回答してください。
 特に、ヘッダー情報を参考にして、文書の構造を意識した回答を心がけてください。
 関連するヘッダーがある場合は、その情報も含めて回答してください。
-複数の異なる観点から情報を統合して、包括的な回答を提供してください。
 できるだけ短い単位で区切って回答を生成してください。"""
             )
 
@@ -835,102 +862,3 @@ class RAGSystem:
 
         self._save_todos()
         return len(self.todos) - initial_count
-
-    def _calculate_content_diversity(
-        self,
-        selected_nodes: List,
-        candidate_node,
-        lambda_param: float = 0.5
-    ) -> float:
-        """
-        選択済みノードとの多様性を計算する（MMRライクなアルゴリズム）
-
-        Args:
-            selected_nodes: 既に選択されたノード
-            candidate_node: 候補ノード
-            lambda_param: 関連性vs多様性のバランス（0-1）
-
-        Returns:
-            多様性スコア（高いほど多様性がある）
-        """
-        if not selected_nodes:
-            return candidate_node.score or 0.0
-
-        # 候補ノードとの類似度（関連性）
-        relevance_score = candidate_node.score or 0.0
-
-        # 既選択ノードとの最大類似度を計算（多様性の逆指標）
-        max_similarity = 0.0
-        candidate_text = candidate_node.text
-
-        for selected in selected_nodes:
-            # 簡単な文字ベースの類似度計算
-            selected_text = selected.text
-            common_words = set(candidate_text.split()) & set(
-                selected_text.split()
-            )
-            similarity = len(common_words) / max(
-                len(set(candidate_text.split())),
-                len(set(selected_text.split())),
-                1
-            )
-            max_similarity = max(max_similarity, similarity)
-
-        # MMRスコア = λ * 関連性 - (1-λ) * 類似度
-        diversity_score = (
-            lambda_param * relevance_score -
-            (1 - lambda_param) * max_similarity
-        )
-
-        return diversity_score
-
-    def _select_diverse_nodes(
-        self,
-        nodes: List,
-        target_count: int = 3,
-        lambda_param: float = 0.7
-    ) -> List:
-        """
-        多様性を考慮してノードを選択する
-
-        Args:
-            nodes: 候補ノードのリスト
-            target_count: 選択するノード数
-            lambda_param: 関連性vs多様性のバランス
-
-        Returns:
-            選択されたノードのリスト
-        """
-        if len(nodes) <= target_count:
-            return nodes
-
-        selected_nodes = []
-        remaining_nodes = nodes.copy()
-
-        # 最初のノードは最高スコアを選択
-        if remaining_nodes:
-            best_node = max(remaining_nodes, key=lambda x: x.score or 0.0)
-            selected_nodes.append(best_node)
-            remaining_nodes.remove(best_node)
-
-        # 残りのノードを多様性を考慮して選択
-        while len(selected_nodes) < target_count and remaining_nodes:
-            best_candidate = None
-            best_score = float('-inf')
-
-            for candidate in remaining_nodes:
-                diversity_score = self._calculate_content_diversity(
-                    selected_nodes, candidate, lambda_param
-                )
-
-                if diversity_score > best_score:
-                    best_score = diversity_score
-                    best_candidate = candidate
-
-            if best_candidate:
-                selected_nodes.append(best_candidate)
-                remaining_nodes.remove(best_candidate)
-            else:
-                break
-
-        return selected_nodes

@@ -19,7 +19,7 @@ FlaskバックエンドとフロントエンドUIを組み合わせた動的なR
 ## 開発環境
 
 - Python 3.10以上
-- Google Cloud Shell環境
+- Windows環境
 - uv（Python パッケージマネージャー）
 - Ollama（ローカルLLM）
 - Flask（Webフレームワーク）
@@ -74,6 +74,7 @@ personal_rag/
 
 ### テストとデバッグ
 
+- 機能変更をしたらテストを実行してください
 - uv run pytest --cov=src --cov-report=html
 - サーバーログは標準出力に表示
 - ブラウザの開発者ツールでフロントエンドデバッグ
