@@ -1,16 +1,21 @@
-from src.server.rag_system import RAGSystem, TodoItem, MarkdownSection
+"""テスト設定ファイル - リファクタリング後の構造に対応"""
+from src.server.markdown_parser import MarkdownSection
+from src.server.todo_manager import TodoItem
 import os
 import tempfile
 import shutil
 import pytest
-from unittest.mock import Mock, patch
+from unittest.mock import Mock, patch, MagicMock
 import sys
 from typing import Dict, Any, Generator
+from datetime import datetime, timedelta
 
 # プロジェクトルートをsys.pathに追加
 project_root = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, project_root)
 sys.path.insert(0, os.path.join(project_root, 'src', 'server'))
+
+# インポート
 
 
 @pytest.fixture
@@ -22,305 +27,74 @@ def temp_dir() -> Generator[str, None, None]:
 
 
 @pytest.fixture
-def mock_rag_system(temp_dir):
-    """モックRAGシステムインスタンス"""
-    # より包括的なモック設定
-    with patch('src.server.rag_system.OllamaEmbedding'), \
-            patch('src.server.rag_system.Ollama'), \
-            patch('src.server.rag_system.faiss'), \
-            patch('src.server.rag_system.VectorStoreIndex'), \
-            patch('src.server.rag_system.Settings'), \
-            patch.dict('os.environ', {'IS_TESTING': 'true'}):
-
-        data_dir = os.path.join(temp_dir, 'data')
-        persist_dir = os.path.join(temp_dir, 'storage')
-        os.makedirs(data_dir, exist_ok=True)
-        os.makedirs(persist_dir, exist_ok=True)
-
-        # RAGSystemの__init__をパッチして直接インスタンスを作成
-        rag_system = object.__new__(RAGSystem)
-
-        # 必要な属性を手動で設定
-        rag_system.persist_dir = persist_dir
-        rag_system.data_dir = data_dir
-        rag_system.embedding_dim = 768
-        rag_system.faiss_index_path = os.path.join(
-            persist_dir, "faiss_index.bin")
-        rag_system.hash_file_path = os.path.join(
-            persist_dir, "document_hashes.json")
-        rag_system.todo_file_path = os.path.join(persist_dir, "todos.json")
-        rag_system.document_hashes = {}
-        rag_system.todos = []
-
-        # MarkdownItパーサーのモック設定
-        rag_system.md_parser = Mock()
-        # parseメソッドが返すトークンリストをモック
-        mock_tokens = [
-            Mock(type='heading_open', tag='h1', level=1),
-            Mock(type='inline', content='メインタイトル'),
-            Mock(type='heading_close'),
-            Mock(type='paragraph_open'),
-            Mock(type='inline', content='コンテンツ'),
-            Mock(type='paragraph_close')
-        ]
-        rag_system.md_parser.parse.return_value = mock_tokens
-
-        # モックインデックスを設定
-        rag_system.index = Mock()
-        mock_retriever = Mock()
-        mock_retriever.retrieve.return_value = []  # 空のリストを返す
-        rag_system.index.as_retriever.return_value = mock_retriever
-        rag_system.index.as_query_engine.return_value = Mock()
-        rag_system.llm = Mock()
-        rag_system.embed_model = Mock()
-
-        # 実際のメソッドを実装
-        # TODO関連のメソッドを実装
-        def add_todo(self, content, priority="medium", source_file="manual",
-                     source_section="manual"):
-            from datetime import datetime
-            import uuid
-            todo = TodoItem(
-                id=str(uuid.uuid4()),
-                content=content,
-                priority=priority,
-                status="pending",
-                created_at=datetime.now().isoformat(),
-                updated_at=datetime.now().isoformat(),
-                source_file=source_file,
-                source_section=source_section,
-                tags=[]
-            )
-            self.todos.append(todo)
-            return todo
-
-        def get_todos(self, status=None):
-            if status:
-                return [todo for todo in self.todos
-                        if todo.status == status]
-            return self.todos.copy()
-
-        def update_todo(self, todo_id, **kwargs):
-            for todo in self.todos:
-                if todo.id == todo_id:
-                    for key, value in kwargs.items():
-                        if hasattr(todo, key):
-                            setattr(todo, key, value)
-                    return todo
-            return None
-
-        def delete_todo(self, todo_id):
-            for i, todo in enumerate(self.todos):
-                if todo.id == todo_id:
-                    self.todos.pop(i)
-                    return True
-            return False
-
-        def get_overdue_todos(self):
-            from datetime import datetime
-            current_date = datetime.now().date()
-            overdue_todos = []
-            for todo in self.todos:
-                if todo.due_date:
-                    try:
-                        due_date = datetime.fromisoformat(todo.due_date).date()
-                        if (due_date < current_date and
-                                todo.status != "completed"):
-                            overdue_todos.append(todo)
-                    except ValueError:
-                        continue
-            return overdue_todos
-
-        def aggregate_todos_by_date(self):
-            result = {}
-            for todo in self.todos:
-                date_key = todo.created_at[:10]  # YYYY-MM-DD
-                if date_key not in result:
-                    result[date_key] = []
-                result[date_key].append(todo)
-            return result
-
-        def extract_todos_from_documents(self):
-            import os
-            # 既存のTODOのIDセットを作成
-            existing_todo_ids = {todo.id for todo in self.todos}
-            new_todos = []
-
-            for root, _, files in os.walk(self.data_dir):
-                for file in files:
-                    if file.endswith('.md'):
-                        file_path = os.path.join(root, file)
-                        try:
-                            with open(file_path, 'r', encoding='utf-8') as f:
-                                content = f.read()
-                                sections = self._parse_markdown(content)
-
-                                # フルパスを相対パスに変換
-                                relative_path = self._get_relative_path(
-                                    file_path)
-
-                                for section in sections:
-                                    todos = self._extract_todos_from_text(
-                                        section.content, relative_path,
-                                        section.header
-                                    )
-                                    # 重複していないTODOのみを追加
-                                    for todo in todos:
-                                        if todo.id not in existing_todo_ids:
-                                            new_todos.append(todo)
-                                            existing_todo_ids.add(todo.id)
-                        except Exception as e:
-                            print(f"Error processing {file_path}: {e}")
-
-            # 新しいTODOのみを追加
-            self.todos.extend(new_todos)
-            return len(new_todos)
-
-        # 実際のRAGSystemメソッドをバインド
-        from types import MethodType
-        rag_system.add_todo = MethodType(add_todo, rag_system)
-        rag_system.get_todos = MethodType(get_todos, rag_system)
-        rag_system.update_todo = MethodType(update_todo, rag_system)
-        rag_system.delete_todo = MethodType(delete_todo, rag_system)
-        rag_system.get_overdue_todos = MethodType(
-            get_overdue_todos, rag_system)
-        rag_system.aggregate_todos_by_date = MethodType(
-            aggregate_todos_by_date, rag_system)
-        rag_system.extract_todos_from_documents = MethodType(
-            extract_todos_from_documents, rag_system)
-
-        # テストで使用するメソッドをMockオブジェクトに置き換える
-        # これにより、テストで return_value や side_effect を設定できる
-        rag_system.query = Mock(return_value={
-            'answer': 'テストレスポンス',
-            'sources': []
-        })
-        rag_system._parse_markdown = Mock(return_value=[])
-        rag_system._create_new_index = Mock()
-
-        # test_server.pyで使用されるメソッドもMockに置き換え
-        rag_system.update_todo = Mock()
-        rag_system.delete_todo = Mock()
-        rag_system.aggregate_todos_by_date = Mock()
-        rag_system.extract_todos_from_documents = Mock()
-        rag_system.get_overdue_todos = Mock()
-
-        # 最後にもう一度queryと_parse_markdownをMockで上書き
-        rag_system.query = Mock(return_value={
-            'answer': 'テストレスポンス',
-            'sources': []
-        })
-        rag_system._parse_markdown = Mock(return_value=[])
-
-        # 実際のRAGSystemから必要なメソッドをインポートして設定
-        real_rag = RAGSystem.__new__(RAGSystem)
-
-        # プライベートメソッドのバインド（selfが必要）
-        def _parse_markdown(self, content):
-            return real_rag._parse_markdown.__func__(self, content)
-
-        def _extract_todos_from_text(self, text, source_file, source_section):
-            return real_rag._extract_todos_from_text.__func__(
-                self, text, source_file, source_section)
-
-        def _calculate_file_hash(self, file_path):
-            return real_rag._calculate_file_hash.__func__(self, file_path)
-
-        def _check_document_updates(self):
-            return real_rag._check_document_updates.__func__(self)
-
-        def _create_nodes_from_sections(self, sections, doc_id):
-            return real_rag._create_nodes_from_sections.__func__(
-                self, sections, doc_id)
-
-        # 新しいメソッドの追加
-        def _split_text_by_length(self, text, chunk_size=800, overlap=100):
-            return real_rag._split_text_by_length.__func__(
-                self, text, chunk_size, overlap)
-
-        def query(self, query_text):
-            return real_rag.query.__func__(self, query_text)
-
-        def run_interactive(self):
-            return real_rag.run_interactive.__func__(self)
-
-        def _get_relative_path(self, file_path):
-            return real_rag._get_relative_path.__func__(self, file_path)
-
-        rag_system._parse_markdown = MethodType(_parse_markdown, rag_system)
-        rag_system._extract_todos_from_text = MethodType(
-            _extract_todos_from_text, rag_system)
-        rag_system._calculate_file_hash = MethodType(
-            _calculate_file_hash, rag_system)
-        rag_system._check_document_updates = MethodType(
-            _check_document_updates, rag_system)
-        rag_system._create_nodes_from_sections = MethodType(
-            _create_nodes_from_sections, rag_system)
-        rag_system._get_relative_path = MethodType(
-            _get_relative_path, rag_system)
-
-        # 新しいメソッドのバインド
-        rag_system._split_text_by_length = MethodType(
-            _split_text_by_length, rag_system)
-        rag_system.query = MethodType(query, rag_system)
-        rag_system.run_interactive = MethodType(run_interactive, rag_system)
-
-        return rag_system
-
-
-@pytest.fixture
-def sample_markdown_content() -> str:
-    """テスト用のMarkdownコンテンツ"""
-    return """# メインタイトル
-
-これはメインセクションのコンテンツです。
-
-## サブセクション
-
-TODO: この部分を改善する必要があります
-FIXME: バグがあります
-
-- [ ] 実装が必要
-- [x] 完了済みタスク
-
-### 詳細セクション
-
-NOTE: 重要な点を記録
-"""
-
-
-@pytest.fixture
 def sample_todo_items() -> list[TodoItem]:
-    """テスト用のTODO項目"""
+    """サンプルTODO項目を生成"""
+    current_time = datetime.now().isoformat()
+    tomorrow = (datetime.now() + timedelta(days=1)).isoformat()
+    yesterday = (datetime.now() - timedelta(days=1)).isoformat()
+
     return [
         TodoItem(
             id="test1",
             content="テストタスク1",
             status="pending",
             priority="high",
-            created_at="2024-01-01T00:00:00",
-            updated_at="2024-01-01T00:00:00",
-            source_file="project1/test.md",
+            created_at=current_time,
+            updated_at=current_time,
+            source_file="test1.md",
             source_section="セクション1",
-            tags=["テスト"]
+            due_date=tomorrow
         ),
         TodoItem(
             id="test2",
             content="テストタスク2",
             status="completed",
             priority="medium",
-            created_at="2024-01-01T00:00:00",
-            updated_at="2024-01-01T01:00:00",
-            source_file="project1/test.md",
+            created_at=current_time,
+            updated_at=current_time,
+            source_file="test2.md",
             source_section="セクション2",
-            tags=["完了"]
+            due_date=yesterday
         )
     ]
 
 
 @pytest.fixture
+def sample_markdown_content() -> str:
+    """サンプルMarkdownコンテンツ"""
+    return """# メインタイトル
+
+これはメインセクションのコンテンツです。
+
+## サブセクション1
+
+サブセクション1のコンテンツ。
+TODO: この機能を実装する
+
+### サブサブセクション
+
+さらに深いレベルのコンテンツ。
+
+## サブセクション2
+
+- [ ] チェックボックス項目1
+- [x] 完了した項目
+- [ ] チェックボックス項目2
+
+FIXME: このバグを修正する
+
+```python
+print("コードブロック")
+```
+
+[リンクテキスト](https://example.com)
+![画像](image.png)
+"""
+
+
+@pytest.fixture
 def sample_markdown_sections() -> list[MarkdownSection]:
-    """テスト用のMarkdownセクション"""
+    """サンプルMarkdownセクション"""
     return [
         MarkdownSection(
             header="メインタイトル",
@@ -328,13 +102,13 @@ def sample_markdown_sections() -> list[MarkdownSection]:
             level=1
         ),
         MarkdownSection(
-            header="サブセクション",
-            content="TODO: この部分を改善する必要があります\nFIXME: バグがあります",
+            header="サブセクション1",
+            content="サブセクション1のコンテンツ。\nTODO: この機能を実装する",
             level=2
         ),
         MarkdownSection(
-            header="詳細セクション",
-            content="NOTE: 重要な点を記録",
+            header="サブサブセクション",
+            content="さらに深いレベルのコンテンツ。",
             level=3
         )
     ]
@@ -344,14 +118,17 @@ def sample_markdown_sections() -> list[MarkdownSection]:
 def mock_query_response() -> Dict[str, Any]:
     """モッククエリレスポンス"""
     return {
-        'answer': 'これはテスト回答です。',
+        'answer': 'これはテスト用の回答です。',
         'sources': [
             {
                 'header': 'テストヘッダー',
                 'content': 'テストコンテンツ',
                 'doc_id': 'test.md',
+                'file_name': 'test',
+                'folder_name': 'project',
                 'section_id': 1,
                 'level': 2,
+                'type': 'content',
                 'score': 0.95
             }
         ]
@@ -361,9 +138,207 @@ def mock_query_response() -> Dict[str, Any]:
 @pytest.fixture
 def mock_documents():
     """モックドキュメント"""
-    with patch('src.server.rag_system.SimpleDirectoryReader') as mock_reader:
-        mock_doc = Mock()
-        mock_doc.text = "テストドキュメントの内容"
-        mock_doc.doc_id = "test_doc_1"
-        mock_reader.return_value.load_data.return_value = [mock_doc]
-        yield mock_reader
+    mock_doc1 = Mock()
+    mock_doc1.text = "# ドキュメント1\n\nコンテンツ1"
+    mock_doc1.metadata = {"source": "doc1.md"}
+
+    mock_doc2 = Mock()
+    mock_doc2.text = "# ドキュメント2\n\nコンテンツ2"
+    mock_doc2.metadata = {"source": "doc2.md"}
+
+    return [mock_doc1, mock_doc2]
+
+
+@pytest.fixture
+def mock_external_dependencies():
+    """外部依存関係（LlamaIndex、FAISS、Ollama）をモック"""
+    with patch('src.server.index_manager.Ollama') as mock_ollama, \
+            patch('src.server.index_manager.OllamaEmbedding') as mock_embed, \
+            patch('src.server.index_manager.Settings') as mock_settings, \
+            patch('src.server.index_manager.faiss') as mock_faiss, \
+            patch('src.server.index_manager.VectorStoreIndex') as mock_index, \
+            patch('src.server.index_manager.FaissVectorStore') as mock_store, \
+            patch('src.server.index_manager.StorageContext') as mock_context, \
+            patch('src.server.index_manager.load_index_from_storage') as mock_load, \
+            patch('src.server.document_manager.SimpleDirectoryReader') as mock_reader:
+
+        # FAISSインデックスのモック
+        mock_faiss_instance = MagicMock()
+        mock_faiss_instance.ntotal = 0
+        mock_faiss.IndexFlatL2.return_value = mock_faiss_instance
+        mock_faiss.read_index.return_value = mock_faiss_instance
+
+        # VectorStoreIndexのモック
+        mock_index_instance = MagicMock()
+        mock_index.return_value = mock_index_instance
+        mock_load.return_value = mock_index_instance
+
+        # StorageContextのモック
+        mock_context_instance = MagicMock()
+        mock_context.from_defaults.return_value = mock_context_instance
+
+        # SimpleDirectoryReaderのモック
+        mock_reader.return_value.load_data.return_value = []
+
+        yield {
+            'ollama': mock_ollama,
+            'embed': mock_embed,
+            'settings': mock_settings,
+            'faiss': mock_faiss,
+            'index': mock_index,
+            'store': mock_store,
+            'context': mock_context,
+            'load': mock_load,
+            'reader': mock_reader,
+            'faiss_instance': mock_faiss_instance,
+            'index_instance': mock_index_instance
+        }
+
+
+# 各クラス用のフィクスチャー
+
+@pytest.fixture
+def document_manager(temp_dir):
+    """DocumentManagerのインスタンス"""
+    from src.server.document_manager import DocumentManager
+    data_dir = os.path.join(temp_dir, 'data')
+    persist_dir = os.path.join(temp_dir, 'storage')
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(persist_dir, exist_ok=True)
+    return DocumentManager(data_dir, persist_dir)
+
+
+@pytest.fixture
+def todo_manager(temp_dir):
+    """TodoManagerのインスタンス"""
+    from src.server.todo_manager import TodoManager
+    persist_dir = os.path.join(temp_dir, 'storage')
+    os.makedirs(persist_dir, exist_ok=True)
+    return TodoManager(persist_dir)
+
+
+@pytest.fixture
+def markdown_parser():
+    """MarkdownParserのインスタンス"""
+    from src.server.markdown_parser import MarkdownParser
+    return MarkdownParser()
+
+
+@pytest.fixture
+def text_chunker():
+    """TextChunkerのインスタンス"""
+    from src.server.text_chunker import TextChunker
+    return TextChunker(chunk_size=100, chunk_overlap=20)
+
+
+@pytest.fixture
+def index_manager(temp_dir, mock_external_dependencies):
+    """IndexManagerのインスタンス"""
+    from src.server.index_manager import IndexManager
+    persist_dir = os.path.join(temp_dir, 'storage')
+    os.makedirs(persist_dir, exist_ok=True)
+    return IndexManager(persist_dir, embedding_dim=768)
+
+
+@pytest.fixture
+def rag_system(temp_dir, mock_external_dependencies):
+    """リファクタリング後のRAGSystemインスタンス"""
+    from src.server.rag_system import RAGSystem
+    data_dir = os.path.join(temp_dir, 'data')
+    persist_dir = os.path.join(temp_dir, 'storage')
+    os.makedirs(data_dir, exist_ok=True)
+    os.makedirs(persist_dir, exist_ok=True)
+
+    return RAGSystem(
+        persist_dir=persist_dir,
+        data_dir=data_dir,
+        embedding_dim=768,
+        chunk_size=100,
+        chunk_overlap=20
+    )
+
+
+# 後方互換性のための古いフィクスチャー（必要に応じて削除）
+
+@pytest.fixture
+def mock_rag_system(temp_dir):
+    """
+    後方互換性のための古いRAGSystemモック
+
+    注意: 新しいテストでは rag_system フィクスチャーを使用してください
+    """
+    # 簡単なモックオブジェクトを返す
+    mock_system = Mock()
+    mock_system.persist_dir = os.path.join(temp_dir, 'storage')
+    mock_system.data_dir = os.path.join(temp_dir, 'data')
+    mock_system.embedding_dim = 768
+    mock_system.todos = []
+    mock_system.document_hashes = {}
+
+    # 基本的なメソッドをモック
+    mock_system.add_todo.return_value = Mock(id="test_id", content="test")
+    mock_system.get_todos.return_value = []
+    mock_system.update_todo.return_value = None
+    mock_system.delete_todo.return_value = False
+    mock_system.query.return_value = {'answer': 'test', 'sources': []}
+
+    return mock_system
+
+
+# テスト用ヘルパー関数
+
+def create_test_file(directory: str, filename: str, content: str) -> str:
+    """テスト用ファイルを作成"""
+    os.makedirs(directory, exist_ok=True)
+    file_path = os.path.join(directory, filename)
+    with open(file_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    return file_path
+
+
+def create_test_todo(
+    todo_id: str = "test_id",
+    content: str = "テストタスク",
+    status: str = "pending",
+    priority: str = "medium"
+) -> TodoItem:
+    """テスト用TODOアイテムを作成"""
+    current_time = datetime.now().isoformat()
+    return TodoItem(
+        id=todo_id,
+        content=content,
+        status=status,
+        priority=priority,
+        created_at=current_time,
+        updated_at=current_time,
+        source_file="test.md",
+        source_section="テストセクション"
+    )
+
+
+def create_test_markdown_section(
+    header: str = "テストヘッダー",
+    content: str = "テストコンテンツ",
+    level: int = 1
+) -> MarkdownSection:
+    """テスト用Markdownセクションを作成"""
+    return MarkdownSection(
+        header=header,
+        content=content,
+        level=level
+    )
+
+
+# pytest設定
+
+def pytest_configure(config):
+    """pytest設定"""
+    # テスト環境変数を設定
+    os.environ['IS_TESTING'] = 'true'
+
+
+def pytest_unconfigure(config):
+    """pytest終了時の処理"""
+    # テスト環境変数をクリア
+    if 'IS_TESTING' in os.environ:
+        del os.environ['IS_TESTING']

@@ -383,6 +383,10 @@ class TestAPIServer:
         test_content = '# 新しいファイル\n\n保存されたコンテンツです。'
         request_data = {'content': test_content}
 
+        # データディレクトリを事前に作成
+        test_data_dir = os.path.join(temp_dir, 'data')
+        os.makedirs(test_data_dir, exist_ok=True)
+
         with patch('src.server.server.current_dir', temp_dir):
             response = client.put(
                 '/api/files/new_file.md',
@@ -396,7 +400,6 @@ class TestAPIServer:
         assert data['path'] == 'new_file.md'
 
         # ファイルが実際に作成されたことを確認
-        test_data_dir = os.path.join(temp_dir, 'data')
         created_file = os.path.join(test_data_dir, 'new_file.md')
         assert os.path.exists(created_file)
 

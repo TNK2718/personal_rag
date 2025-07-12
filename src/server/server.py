@@ -651,6 +651,20 @@ def refresh_index():
         return jsonify({'error': f'インデックス更新に失敗しました: {str(e)}'}), 500
 
 
+@app.route('/api/index/stats', methods=['GET'])
+def get_index_stats():
+    """インデックス統計情報を取得するエンドポイント"""
+    try:
+        if rag_system is None:
+            return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
+
+        stats = rag_system.get_system_info()
+        return jsonify(stats)
+    except Exception as e:
+        logger.error(f"インデックス統計取得中にエラーが発生しました: {e}")
+        return jsonify({'error': f'インデックス統計取得に失敗しました: {str(e)}'}), 500
+
+
 if __name__ == '__main__':
     # RAGシステムの初期化
     initialize_rag_system()
