@@ -280,20 +280,23 @@ class TestAPIServer:
 
     def test_server_error_handling(self, client, mock_rag_instance):
         """サーバーエラーハンドリングのテスト"""
-        # RAGシステムのクエリメソッドで例外を発生
-        mock_rag_instance.query.side_effect = Exception("テストエラー")
+        # RAGシステムのクエリメソッドでMockを設定
+        from unittest.mock import Mock
+        mock_query_error = Mock(side_effect=Exception("テストエラー"))
+        mock_rag_instance.query = mock_query_error
 
-        request_data = {'query': 'テストクエリ'}
+        with patch('src.server.server.rag_system', mock_rag_instance):
+            request_data = {'query': 'テストクエリ'}
 
-        response = client.post(
-            '/api/query',
-            data=json.dumps(request_data),
-            content_type='application/json'
-        )
+            response = client.post(
+                '/api/query',
+                data=json.dumps(request_data),
+                content_type='application/json'
+            )
 
-        assert response.status_code == 500
-        data = json.loads(response.data)
-        assert 'error' in data
+            assert response.status_code == 500
+            data = json.loads(response.data)
+            assert 'error' in data
 
     def test_rag_system_none_error_handling(self, client):
         """RAGシステムがNoneの場合のエラーハンドリングテスト"""
@@ -492,10 +495,15 @@ class TestAPIServer:
             }
         ]
 
-        mock_rag_instance._parse_markdown.return_value = [
+        # _parse_markdownメソッドをMockで設定
+        from unittest.mock import Mock
+        mock_parse = Mock(return_value=[
             Mock(header='メインタイトル', content='メインコンテンツです。', level=1)
-        ]
-        mock_rag_instance._create_nodes_from_sections.return_value = [
+        ])
+        mock_rag_instance._parse_markdown = mock_parse
+
+        # _create_nodes_from_sectionsメソッドをMockで設定
+        mock_create_nodes = Mock(return_value=[
             Mock(
                 text='メインタイトル',
                 metadata={
@@ -518,7 +526,8 @@ class TestAPIServer:
                     'file_name': 'analyze_test',
                 }
             )
-        ]
+        ])
+        mock_rag_instance._create_nodes_from_sections = mock_create_nodes
 
         with patch('src.server.server.current_dir', temp_dir):
             response = client.get('/api/chunks/analyze/analyze_test.md')
@@ -555,7 +564,8 @@ class TestAPIServer:
 
     def test_refresh_index_endpoint(self, client, mock_rag_instance):
         """インデックス更新エンドポイントのテスト"""
-        mock_rag_instance._create_new_index.return_value = Mock()
+        from unittest.mock import Mock
+        mock_rag_instance._create_new_index = Mock(return_value=Mock())
 
         response = client.post('/api/index/refresh')
 
@@ -575,6 +585,14 @@ class TestAPIServer:
 
     def test_file_api_error_handling(self, client, temp_dir):
         """ファイルAPIのエラーハンドリングテスト"""
+        # テストファイルを作成
+        test_data_dir = os.path.join(temp_dir, 'data')
+        os.makedirs(test_data_dir, exist_ok=True)
+        test_file = os.path.join(test_data_dir, 'test.md')
+
+        with open(test_file, 'w', encoding='utf-8') as f:
+            f.write('テストファイル')
+
         # 権限エラーをシミュレート
         with patch('src.server.server.current_dir', temp_dir), \
                 patch('builtins.open', side_effect=PermissionError("Permission denied")):

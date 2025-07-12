@@ -16,7 +16,7 @@ class TestTodoItem:
             priority="high",
             created_at="2024-01-01T00:00:00",
             updated_at="2024-01-01T00:00:00",
-            source_file="test.md",
+            source_file="project1/test.md",
             source_section="セクション1"
         )
 
@@ -26,7 +26,7 @@ class TestTodoItem:
         assert todo.priority == "high"
         assert todo.created_at == "2024-01-01T00:00:00"
         assert todo.updated_at == "2024-01-01T00:00:00"
-        assert todo.source_file == "test.md"
+        assert todo.source_file == "project1/test.md"
         assert todo.source_section == "セクション1"
         assert todo.due_date is None
         assert todo.tags == []
@@ -40,7 +40,7 @@ class TestTodoItem:
             priority="medium",
             created_at="2024-01-01T00:00:00",
             updated_at="2024-01-01T00:00:00",
-            source_file="test.md",
+            source_file="project1/test.md",
             source_section="セクション1",
             tags=["urgent", "bug"]
         )
@@ -57,7 +57,7 @@ class TestTodoItem:
             priority="high",
             created_at="2024-01-01T00:00:00",
             updated_at="2024-01-01T00:00:00",
-            source_file="test.md",
+            source_file="project1/test.md",
             source_section="セクション1",
             due_date=due_date
         )
@@ -74,7 +74,7 @@ class TestTodoItem:
             priority="low",
             created_at="2024-01-01T00:00:00",
             updated_at="2024-01-01T00:00:00",
-            source_file="test.md",
+            source_file="project1/test.md",
             source_section="セクション1",
             tags=None
         )

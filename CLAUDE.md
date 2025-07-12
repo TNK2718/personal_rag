@@ -60,6 +60,7 @@ personal_rag/
 - Python: PEP 8に従う
 - JavaScript: ES6+を使用
 - HTML/CSS: セマンティックHTMLとレスポンシブデザイン
+- 編集したらフォーマッターをかけて下さい
 
 ### 主要なファイル
 

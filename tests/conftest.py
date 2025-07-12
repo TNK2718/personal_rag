@@ -118,14 +118,18 @@ def mock_rag_system(temp_dir):
 
         def get_overdue_todos(self):
             from datetime import datetime
-            current_time = datetime.now()
-            overdue = []
+            current_date = datetime.now().date()
+            overdue_todos = []
             for todo in self.todos:
-                if todo.due_date and todo.status != "completed":
-                    due_date = datetime.fromisoformat(todo.due_date)
-                    if due_date < current_time:
-                        overdue.append(todo)
-            return overdue
+                if todo.due_date:
+                    try:
+                        due_date = datetime.fromisoformat(todo.due_date).date()
+                        if (due_date < current_date and
+                                todo.status != "completed"):
+                            overdue_todos.append(todo)
+                    except ValueError:
+                        continue
+            return overdue_todos
 
         def aggregate_todos_by_date(self):
             result = {}
@@ -137,7 +141,40 @@ def mock_rag_system(temp_dir):
             return result
 
         def extract_todos_from_documents(self):
-            return 0
+            import os
+            # 既存のTODOのIDセットを作成
+            existing_todo_ids = {todo.id for todo in self.todos}
+            new_todos = []
+
+            for root, _, files in os.walk(self.data_dir):
+                for file in files:
+                    if file.endswith('.md'):
+                        file_path = os.path.join(root, file)
+                        try:
+                            with open(file_path, 'r', encoding='utf-8') as f:
+                                content = f.read()
+                                sections = self._parse_markdown(content)
+
+                                # フルパスを相対パスに変換
+                                relative_path = self._get_relative_path(
+                                    file_path)
+
+                                for section in sections:
+                                    todos = self._extract_todos_from_text(
+                                        section.content, relative_path,
+                                        section.header
+                                    )
+                                    # 重複していないTODOのみを追加
+                                    for todo in todos:
+                                        if todo.id not in existing_todo_ids:
+                                            new_todos.append(todo)
+                                            existing_todo_ids.add(todo.id)
+                        except Exception as e:
+                            print(f"Error processing {file_path}: {e}")
+
+            # 新しいTODOのみを追加
+            self.todos.extend(new_todos)
+            return len(new_todos)
 
         # 実際のRAGSystemメソッドをバインド
         from types import MethodType
@@ -151,6 +188,29 @@ def mock_rag_system(temp_dir):
             aggregate_todos_by_date, rag_system)
         rag_system.extract_todos_from_documents = MethodType(
             extract_todos_from_documents, rag_system)
+
+        # テストで使用するメソッドをMockオブジェクトに置き換える
+        # これにより、テストで return_value や side_effect を設定できる
+        rag_system.query = Mock(return_value={
+            'answer': 'テストレスポンス',
+            'sources': []
+        })
+        rag_system._parse_markdown = Mock(return_value=[])
+        rag_system._create_new_index = Mock()
+
+        # test_server.pyで使用されるメソッドもMockに置き換え
+        rag_system.update_todo = Mock()
+        rag_system.delete_todo = Mock()
+        rag_system.aggregate_todos_by_date = Mock()
+        rag_system.extract_todos_from_documents = Mock()
+        rag_system.get_overdue_todos = Mock()
+
+        # 最後にもう一度queryと_parse_markdownをMockで上書き
+        rag_system.query = Mock(return_value={
+            'answer': 'テストレスポンス',
+            'sources': []
+        })
+        rag_system._parse_markdown = Mock(return_value=[])
 
         # 実際のRAGSystemから必要なメソッドをインポートして設定
         real_rag = RAGSystem.__new__(RAGSystem)
@@ -184,6 +244,9 @@ def mock_rag_system(temp_dir):
         def run_interactive(self):
             return real_rag.run_interactive.__func__(self)
 
+        def _get_relative_path(self, file_path):
+            return real_rag._get_relative_path.__func__(self, file_path)
+
         rag_system._parse_markdown = MethodType(_parse_markdown, rag_system)
         rag_system._extract_todos_from_text = MethodType(
             _extract_todos_from_text, rag_system)
@@ -193,6 +256,8 @@ def mock_rag_system(temp_dir):
             _check_document_updates, rag_system)
         rag_system._create_nodes_from_sections = MethodType(
             _create_nodes_from_sections, rag_system)
+        rag_system._get_relative_path = MethodType(
+            _get_relative_path, rag_system)
 
         # 新しいメソッドのバインド
         rag_system._split_text_by_length = MethodType(
@@ -235,7 +300,7 @@ def sample_todo_items() -> list[TodoItem]:
             priority="high",
             created_at="2024-01-01T00:00:00",
             updated_at="2024-01-01T00:00:00",
-            source_file="test.md",
+            source_file="project1/test.md",
             source_section="セクション1",
             tags=["テスト"]
         ),
@@ -246,7 +311,7 @@ def sample_todo_items() -> list[TodoItem]:
             priority="medium",
             created_at="2024-01-01T00:00:00",
             updated_at="2024-01-01T01:00:00",
-            source_file="test.md",
+            source_file="project1/test.md",
             source_section="セクション2",
             tags=["完了"]
         )
