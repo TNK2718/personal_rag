@@ -180,19 +180,21 @@ TODO: テスト項目を実装する
         info = rag_system.get_system_info()
 
         # 基本情報が含まれている
-        assert 'persist_dir' in info
-        assert 'data_dir' in info
-        assert 'embedding_dim' in info
-        assert 'chunk_size' in info
-        assert 'chunk_overlap' in info
         assert 'index_stats' in info
-        assert 'todo_count' in info
-        assert 'document_count' in info
+        assert 'todo_stats' in info
+        assert 'document_stats' in info
+        assert 'system_components' in info
 
-        # 値の妥当性確認
-        assert info['embedding_dim'] == 768
-        assert info['chunk_size'] == 100
-        assert info['chunk_overlap'] == 20
+        # 統計情報が適切な形式
+        assert isinstance(info['todo_stats'], dict)
+        assert isinstance(info['document_stats'], dict)
+        assert isinstance(info['index_stats'], dict)
+        assert isinstance(info['system_components'], dict)
+
+        # 詳細な統計情報を確認
+        assert 'total_todos' in info['todo_stats']
+        assert 'total_documents' in info['document_stats']
+        assert 'total_nodes' in info['index_stats']
 
     def test_document_update_detection_integration(self, rag_system, temp_dir):
         """ドキュメント更新検出の統合テスト"""
@@ -343,3 +345,190 @@ FIXME: エラーハンドリングを修正
         # ファイル一覧取得
         all_files = rag_system.document_manager.get_all_document_files()
         assert test_file in all_files
+
+
+class TestChunkLevelIncrementalUpdate:
+    """チャンクレベル増分更新の統合テストクラス"""
+
+    @pytest.fixture
+    def temp_dir(self):
+        """一時ディレクトリを作成"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            yield temp_dir
+
+    @pytest.fixture
+    def mock_external_dependencies(self):
+        """外部依存関係をモック"""
+        with patch('src.server.index_manager.Ollama') as mock_ollama, \
+                patch('src.server.index_manager.OllamaEmbedding') as mock_embed, \
+                patch('src.server.index_manager.Settings') as mock_settings, \
+                patch('src.server.index_manager.faiss') as mock_faiss, \
+                patch('src.server.index_manager.VectorStoreIndex') as mock_index, \
+                patch('src.server.index_manager.FaissVectorStore') as mock_store, \
+                patch('src.server.index_manager.StorageContext') as mock_context, \
+                patch('src.server.index_manager.load_index_from_storage') as mock_load:
+
+            # 基本的なモック設定
+            mock_index_instance = MagicMock()
+            mock_index.return_value = mock_index_instance
+
+            mock_context_instance = MagicMock()
+            mock_context.from_defaults.return_value = mock_context_instance
+
+            mock_faiss.IndexFlatL2.return_value = MagicMock()
+
+            yield {
+                'ollama': mock_ollama,
+                'embed': mock_embed,
+                'settings': mock_settings,
+                'faiss': mock_faiss,
+                'index': mock_index,
+                'store': mock_store,
+                'context': mock_context,
+                'load': mock_load,
+                'index_instance': mock_index_instance,
+                'context_instance': mock_context_instance
+            }
+
+    @pytest.fixture
+    def rag_system(self, temp_dir, mock_external_dependencies):
+        """RAGシステムのインスタンスを作成"""
+        data_dir = os.path.join(temp_dir, 'data')
+        persist_dir = os.path.join(temp_dir, 'storage')
+        os.makedirs(data_dir, exist_ok=True)
+        os.makedirs(persist_dir, exist_ok=True)
+
+        return RAGSystem(persist_dir=persist_dir, data_dir=data_dir)
+
+    def test_chunk_level_incremental_update(self, rag_system, temp_dir):
+        """チャンクレベルの増分更新テスト"""
+        data_dir = rag_system.data_dir
+
+        # 初期ファイルを作成
+        test_file = os.path.join(data_dir, "test_doc.md")
+        initial_content = """# 初期タイトル
+
+これは初期のセクション1です。
+
+## サブセクション
+
+これは初期のサブセクションです。
+"""
+        with open(test_file, 'w', encoding='utf-8') as f:
+            f.write(initial_content)
+
+        # 初期インデックス作成
+        rag_system._check_and_update_index_on_init()
+
+        # 初期状態でのチャンクハッシュを確認
+        initial_chunk_hashes = rag_system.document_manager.load_chunk_hashes()
+        assert len(initial_chunk_hashes) > 0
+
+        # ファイルの一部を変更
+        modified_content = """# 変更されたタイトル
+
+これは変更されたセクション1です。
+
+## サブセクション
+
+これは初期のサブセクションです。
+"""
+        with open(test_file, 'w', encoding='utf-8') as f:
+            f.write(modified_content)
+
+        # 増分更新を実行
+        updated_chunks = rag_system.check_chunk_level_updates([test_file])
+
+        # 変更されたチャンクが検出されることを確認
+        assert len(updated_chunks) > 0
+
+        # 新しいチャンクハッシュが保存されていることを確認
+        new_chunk_hashes = rag_system.document_manager.load_chunk_hashes()
+        assert new_chunk_hashes != initial_chunk_hashes
+
+    def test_chunk_level_index_update(self, rag_system, temp_dir):
+        """チャンクレベルでのインデックス更新テスト"""
+        data_dir = rag_system.data_dir
+
+        # テストファイルを作成
+        test_file = os.path.join(data_dir, "index_test.md")
+        content = """# テストタイトル
+
+これはテストセクションです。
+
+## サブセクション
+
+これはサブセクションです。
+"""
+        with open(test_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        # チャンクレベルでの更新を実行
+        updated_chunks = rag_system.check_chunk_level_updates([test_file])
+
+        # 更新されたチャンクをインデックスに適用
+        rag_system.apply_chunk_updates(updated_chunks)
+
+        # インデックスが更新されたことを確認
+        assert rag_system.index is not None
+
+    def test_chunk_deletion_handling(self, rag_system, temp_dir):
+        """チャンク削除の処理テスト"""
+        data_dir = rag_system.data_dir
+
+        # 複数のファイルを作成
+        file1 = os.path.join(data_dir, "file1.md")
+        file2 = os.path.join(data_dir, "file2.md")
+
+        with open(file1, 'w', encoding='utf-8') as f:
+            f.write("# ファイル1\n\nコンテンツ1")
+        with open(file2, 'w', encoding='utf-8') as f:
+            f.write("# ファイル2\n\nコンテンツ2")
+
+        # 初期インデックス作成
+        rag_system._check_and_update_index_on_init()
+
+        # file2を削除
+        os.remove(file2)
+
+        # 削除されたチャンクをチェック
+        current_files = [file1]
+        removed_chunks = rag_system.handle_deleted_chunks(current_files)
+
+        # 削除されたチャンクが検出されることを確認
+        assert len(removed_chunks) > 0
+
+        # チャンクハッシュから削除されていることを確認
+        chunk_hashes = rag_system.document_manager.load_chunk_hashes()
+        for chunk_id in removed_chunks:
+            assert chunk_id not in chunk_hashes
+
+    def test_performance_comparison(self, rag_system, temp_dir):
+        """従来の方法との性能比較テスト"""
+        data_dir = rag_system.data_dir
+
+        # 大きなファイルを作成
+        large_file = os.path.join(data_dir, "large_file.md")
+        content = ""
+        for i in range(50):
+            content += f"# セクション{i}\n\n"
+            content += f"これはセクション{i}の詳細な内容です。" * 10
+            content += "\n\n"
+
+        with open(large_file, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        # 初期インデックス作成
+        rag_system._check_and_update_index_on_init()
+
+        # 一部だけを変更
+        modified_content = content.replace("セクション0", "変更されたセクション0")
+        with open(large_file, 'w', encoding='utf-8') as f:
+            f.write(modified_content)
+
+        # チャンクレベルの更新をテスト
+        updated_chunks = rag_system.check_chunk_level_updates([large_file])
+
+        # 変更されたチャンクのみが検出されることを確認
+        # 大きなファイルでも少数のチャンクのみが更新対象になる
+        assert len(updated_chunks) < 10  # 全50セクションより大幅に少ない

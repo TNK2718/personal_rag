@@ -234,11 +234,134 @@ class TestDocumentManager:
         relative_path = document_manager.get_relative_path(normal_path)
         assert "/" in relative_path or len(relative_path.split(os.sep)) >= 1
 
-    def test_error_handling_in_load_documents(self, document_manager):
-        """load_documentsでのエラーハンドリングテスト"""
-        # SimpleDirectoryReaderでエラーが発生する場合をテスト
-        with patch('src.server.document_manager.SimpleDirectoryReader') as mock_reader:
-            mock_reader.side_effect = Exception("Load error")
+    def test_error_handling_in_load_documents(self, temp_dir):
+        """ドキュメント読み込みエラーハンドリングテスト"""
+        data_dir = os.path.join(temp_dir, 'data')
+        persist_dir = os.path.join(temp_dir, 'storage')
+        os.makedirs(data_dir, exist_ok=True)
 
-            documents = document_manager.load_documents()
-            assert len(documents) == 0
+        # 読み込み権限のないファイルを作成
+        restricted_file = os.path.join(data_dir, 'restricted.md')
+        with open(restricted_file, 'w', encoding='utf-8') as f:
+            f.write('# Restricted file')
+
+        doc_manager = DocumentManager(data_dir, persist_dir)
+
+        # SimpleDirectoryReaderでエラーを発生させる
+        with patch('src.server.document_manager.SimpleDirectoryReader') as mock_reader:
+            mock_reader.side_effect = Exception("読み込みエラー")
+            documents = doc_manager.load_documents()
+            assert documents == []
+
+
+class TestChunkHashManagement:
+    """チャンクハッシュ管理のテストクラス"""
+
+    @pytest.fixture
+    def temp_dir(self):
+        """一時ディレクトリを作成"""
+        with tempfile.TemporaryDirectory() as temp_dir:
+            yield temp_dir
+
+    @pytest.fixture
+    def document_manager(self, temp_dir):
+        """DocumentManagerのインスタンスを作成"""
+        data_dir = os.path.join(temp_dir, 'data')
+        persist_dir = os.path.join(temp_dir, 'storage')
+        os.makedirs(data_dir, exist_ok=True)
+        os.makedirs(persist_dir, exist_ok=True)
+        return DocumentManager(data_dir, persist_dir)
+
+    def test_calculate_chunk_hash(self, document_manager):
+        """チャンクハッシュ計算テスト"""
+        chunk_text = "これはテストチャンクです。"
+
+        # チャンクハッシュを計算
+        chunk_hash = document_manager.calculate_chunk_hash(chunk_text)
+
+        # ハッシュが生成されることを確認
+        assert chunk_hash is not None
+        assert len(chunk_hash) == 32  # MD5ハッシュの長さ
+        assert isinstance(chunk_hash, str)
+
+    def test_save_and_load_chunk_hashes(self, document_manager):
+        """チャンクハッシュの保存・読み込みテスト"""
+        chunk_hashes = {
+            "test.md:section_0:chunk_0": "hash1",
+            "test.md:section_0:chunk_1": "hash2",
+            "test.md:section_1:chunk_0": "hash3"
+        }
+
+        # チャンクハッシュを保存
+        document_manager.save_chunk_hashes(chunk_hashes)
+
+        # チャンクハッシュを読み込み
+        loaded_hashes = document_manager.load_chunk_hashes()
+
+        assert loaded_hashes == chunk_hashes
+
+    def test_check_chunk_updates(self, document_manager):
+        """チャンクレベルの更新検出テスト"""
+        # 既存のチャンクハッシュを設定
+        existing_hashes = {
+            "test.md:section_0:chunk_0": "old_hash1",
+            "test.md:section_0:chunk_1": "old_hash2"
+        }
+        document_manager.save_chunk_hashes(existing_hashes)
+
+        # 新しいチャンクデータ
+        new_chunks = [
+            {"id": "test.md:section_0:chunk_0", "text": "変更されたチャンク"},
+            {"id": "test.md:section_0:chunk_1", "text": "変更されていないチャンク"},
+            {"id": "test.md:section_1:chunk_0", "text": "新しいチャンク"}
+        ]
+
+        # MD5ハッシュを模擬的に計算
+        with patch.object(document_manager, 'calculate_chunk_hash') as mock_hash:
+            mock_hash.side_effect = ["new_hash1", "old_hash2", "new_hash3"]
+
+            updated_chunks = document_manager.check_chunk_updates(new_chunks)
+
+            # 変更されたチャンクと新しいチャンクが検出される
+            assert len(updated_chunks) == 2
+            chunk_ids = [chunk["id"] for chunk in updated_chunks]
+            assert "test.md:section_0:chunk_0" in chunk_ids  # 変更されたチャンク
+            assert "test.md:section_1:chunk_0" in chunk_ids  # 新しいチャンク
+
+    def test_get_chunk_metadata(self, document_manager):
+        """チャンクメタデータ取得テスト"""
+        chunk_id = "test.md:section_0:chunk_0"
+
+        # チャンクメタデータを取得
+        metadata = document_manager.get_chunk_metadata(chunk_id)
+
+        assert metadata["doc_id"] == "test.md"
+        assert metadata["section_id"] == 0
+        assert metadata["chunk_id"] == 0
+
+    def test_remove_deleted_chunks(self, document_manager):
+        """削除されたチャンクの除去テスト"""
+        # 既存のチャンクハッシュを設定
+        existing_hashes = {
+            "test.md:section_0:chunk_0": "hash1",
+            "test.md:section_0:chunk_1": "hash2",
+            "deleted.md:section_0:chunk_0": "hash3"
+        }
+        document_manager.save_chunk_hashes(existing_hashes)
+
+        # 現在のチャンクリスト（deleted.mdは除外）
+        current_chunks = [
+            {"id": "test.md:section_0:chunk_0", "text": "チャンク0"},
+            {"id": "test.md:section_0:chunk_1", "text": "チャンク1"}
+        ]
+
+        # 削除されたチャンクを除去
+        removed_chunks = document_manager.remove_deleted_chunks(current_chunks)
+
+        # 削除されたチャンクが返される
+        assert len(removed_chunks) == 1
+        assert removed_chunks[0] == "deleted.md:section_0:chunk_0"
+
+        # ハッシュからも削除される
+        updated_hashes = document_manager.load_chunk_hashes()
+        assert "deleted.md:section_0:chunk_0" not in updated_hashes

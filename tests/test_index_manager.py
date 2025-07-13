@@ -245,6 +245,8 @@ class TestIndexManager:
         mock_vector_store = MagicMock()
         mock_faiss_index = MagicMock()
         mock_faiss_index.ntotal = 0
+        # _faiss_index属性も設定
+        mock_vector_store._faiss_index = mock_faiss_index
         mock_vector_store.faiss_index = mock_faiss_index
         mock_index.storage_context.vector_store = mock_vector_store
 
@@ -261,6 +263,8 @@ class TestIndexManager:
         mock_vector_store = MagicMock()
         mock_faiss_index = MagicMock()
         mock_faiss_index.ntotal = 10
+        # _faiss_index属性も設定
+        mock_vector_store._faiss_index = mock_faiss_index
         mock_vector_store.faiss_index = mock_faiss_index
         mock_index.storage_context.vector_store = mock_vector_store
 

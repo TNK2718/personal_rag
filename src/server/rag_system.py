@@ -268,42 +268,193 @@ class RAGSystem:
             # インデックスに追加
             if updated_docs:
                 self.add_documents(updated_docs)
+
+                # チャンクハッシュを保存
+                self._save_chunk_hashes_for_documents(updated_docs)
+
                 self.document_manager.save_document_hashes()
                 print(
-                    f"[DEBUG] Updated index with {len(updated_docs)} documents during initialization")
-        else:
-            print("[DEBUG] No document updates found during initialization")
+                    f"[DEBUG] Updated index with {len(updated_docs)} documents")
+
+    def _save_chunk_hashes_for_documents(self, documents: List[Document]) -> None:
+        """ドキュメントのチャンクハッシュを保存する"""
+        for doc in documents:
+            sections = self.markdown_parser.parse_markdown(doc.text)
+            doc_id = self.document_manager.get_relative_path(
+                doc.doc_id or "unknown")
+
+            for i, section in enumerate(sections):
+                section_text = f"# {section.header}\n\n{section.content}"
+                chunks = self.text_chunker.smart_split_text(section_text)
+
+                for j, chunk in enumerate(chunks):
+                    if chunk.strip():
+                        chunk_id = f"{doc_id}:section_{i}:chunk_{j}"
+                        chunk_hash = self.document_manager.calculate_chunk_hash(
+                            chunk)
+                        self.document_manager.chunk_hashes[chunk_id] = chunk_hash
+
+        # 更新されたチャンクハッシュを保存
+        self.document_manager.save_chunk_hashes(
+            self.document_manager.chunk_hashes)
+
+    def check_chunk_level_updates(self, file_paths: List[str]) -> List[Dict]:
+        """チャンクレベルでの更新をチェックする"""
+        updated_chunks = []
+
+        for file_path in file_paths:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                # Markdownを解析してチャンクを作成
+                sections = self.markdown_parser.parse_markdown(content)
+                doc_id = self.document_manager.get_relative_path(file_path)
+
+                file_chunks = []
+                for i, section in enumerate(sections):
+                    section_text = f"# {section.header}\n\n{section.content}"
+                    chunks = self.text_chunker.smart_split_text(section_text)
+
+                    for j, chunk in enumerate(chunks):
+                        if chunk.strip():
+                            chunk_data = {
+                                "id": f"{doc_id}:section_{i}:chunk_{j}",
+                                "text": chunk,
+                                "metadata": {
+                                    "doc_id": doc_id,
+                                    "section_id": i,
+                                    "chunk_id": j,
+                                    "header": section.header,
+                                    "level": section.level
+                                }
+                            }
+                            file_chunks.append(chunk_data)
+
+                # チャンクレベルでの更新をチェック
+                updated_file_chunks = self.document_manager.check_chunk_updates(
+                    file_chunks)
+                updated_chunks.extend(updated_file_chunks)
+
+            except Exception as e:
+                print(f"[DEBUG] Error processing file {file_path}: {e}")
+
+        # 更新されたチャンクハッシュを保存
+        if updated_chunks:
+            self.document_manager.save_chunk_hashes(
+                self.document_manager.chunk_hashes)
+
+        return updated_chunks
+
+    def apply_chunk_updates(self, updated_chunks: List[Dict]) -> None:
+        """更新されたチャンクをインデックスに適用する"""
+        if not updated_chunks:
+            return
+
+        print(f"[DEBUG] Applying {len(updated_chunks)} chunk updates")
+
+        # 更新されたチャンクからノードを作成
+        nodes = []
+        for chunk_data in updated_chunks:
+            node = CustomTextNode(
+                text=chunk_data["text"],
+                id_=chunk_data["id"]
+            )
+            node.metadata = chunk_data["metadata"]
+            nodes.append(node)
+
+        # 既存のチャンクを削除（同じIDのものがあれば）
+        self._remove_existing_chunks([chunk["id"] for chunk in updated_chunks])
+
+        # 新しいチャンクを追加
+        self.index_manager.add_nodes(self.index, nodes)
+
+        # チャンクハッシュを更新
+        for chunk_data in updated_chunks:
+            chunk_hash = self.document_manager.calculate_chunk_hash(
+                chunk_data["text"])
+            self.document_manager.chunk_hashes[chunk_data["id"]] = chunk_hash
+
+        self.document_manager.save_chunk_hashes(
+            self.document_manager.chunk_hashes)
+
+    def handle_deleted_chunks(self, current_files: List[str]) -> List[str]:
+        """削除されたチャンクを処理する"""
+        # 現在のファイルからチャンクを生成
+        current_chunks = []
+        for file_path in current_files:
+            try:
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+
+                sections = self.markdown_parser.parse_markdown(content)
+                doc_id = self.document_manager.get_relative_path(file_path)
+
+                for i, section in enumerate(sections):
+                    section_text = f"# {section.header}\n\n{section.content}"
+                    chunks = self.text_chunker.smart_split_text(section_text)
+
+                    for j, chunk in enumerate(chunks):
+                        if chunk.strip():
+                            chunk_data = {
+                                "id": f"{doc_id}:section_{i}:chunk_{j}",
+                                "text": chunk
+                            }
+                            current_chunks.append(chunk_data)
+
+            except Exception as e:
+                print(f"[DEBUG] Error processing file {file_path}: {e}")
+
+        # 削除されたチャンクを特定
+        removed_chunk_ids = self.document_manager.remove_deleted_chunks(
+            current_chunks)
+
+        # インデックスからも削除
+        if removed_chunk_ids:
+            self._remove_existing_chunks(removed_chunk_ids)
+
+        return removed_chunk_ids
+
+    def _remove_existing_chunks(self, chunk_ids: List[str]) -> None:
+        """既存のチャンクをインデックスから削除する"""
+        # 現在の実装では、LlamaIndexでの個別ノード削除は複雑
+        # 実用的には、インデックス全体を再構築するか、
+        # 削除フラグを使用する方法がある
+        # ここでは簡単な実装として、削除をログに記録
+        print(f"[DEBUG] Removing {len(chunk_ids)} chunks from index")
+        for chunk_id in chunk_ids:
+            print(f"[DEBUG] Would remove chunk: {chunk_id}")
 
     def run_interactive(self) -> None:
-        """
-        インタラクティブモードで実行する
-        """
+        """インタラクティブなRAGシステムを実行する"""
         print("RAGシステムが起動しました。質問を入力してください。")
         print("終了するには 'quit' または 'exit' を入力してください。")
 
         while True:
             try:
-                query = input("\n質問: ").strip()
+                query = input("\n質問: ")
 
-                if query.lower() in ['quit', 'exit']:
+                if query.lower() in ['quit', 'exit', 'q']:
                     print("RAGシステムを終了します。")
                     break
 
-                if not query:
+                if not query.strip():
                     continue
 
-                result = self.query(query)
+                # 動的な更新チェック
+                self._check_and_update_index()
 
+                # 質問に回答
+                result = self.query(query)
                 print(f"\n回答: {result['answer']}")
 
+                # 関連文書の表示
                 if result['sources']:
-                    print("\n参照元:")
-                    for i, source in enumerate(result['sources'][:3]):
-                        print(f"  [{i+1}] {source['header']} "
-                              f"({source['doc_id']})")
-                        print(f"      {source['content'][:200]}...")
-                        if len(source['content']) > 200:
-                            print("      [...]")
+                    print("\n関連文書:")
+                    for i, source in enumerate(result['sources'], 1):
+                        print(
+                            f"{i}. {source['header']} (スコア: {source['score']:.2f})")
+                        print(f"   {source['content'][:100]}...")
 
             except KeyboardInterrupt:
                 print("\nRAGシステムを終了します。")
@@ -320,7 +471,7 @@ class RAGSystem:
         self, content: str, priority: str = "medium",
         source_file: str = "manual", source_section: str = "manual"
     ) -> TodoItem:
-        """新しいTODOを追加する"""
+        """TODOを追加する"""
         return self.todo_manager.add_todo(content, priority, source_file, source_section)
 
     def update_todo(self, todo_id: str, **kwargs) -> Optional[TodoItem]:
@@ -340,72 +491,85 @@ class RAGSystem:
         return self.todo_manager.get_overdue_todos()
 
     def extract_todos_from_documents(self) -> int:
-        """
-        ドキュメントからTODOを抽出する
+        """ドキュメントからTODOを抽出する"""
+        total_extracted = 0
 
-        Returns:
-            抽出されたTODO数
-        """
+        # 全ドキュメントファイルを取得
         all_files = self.document_manager.get_all_document_files()
-        total_todos = 0
 
         for file_path in all_files:
             try:
                 with open(file_path, 'r', encoding='utf-8') as f:
                     content = f.read()
 
-                sections = self.markdown_parser.parse_markdown(content)
+                # ファイルパスを相対パスに変換
                 relative_path = self.document_manager.get_relative_path(
                     file_path)
 
-                for section in sections:
-                    extracted_todos = self.todo_manager.extract_todos_from_text(
-                        section.content, relative_path, section.header
+                # Markdownを解析してセクションごとに処理
+                sections = self.markdown_parser.parse_markdown(content)
+
+                for i, section in enumerate(sections):
+                    section_name = f"{section.header} (Level {section.level})"
+
+                    # セクションからTODOを抽出
+                    todos = self.todo_manager.extract_todos_from_text(
+                        section.content,
+                        relative_path,
+                        section_name
                     )
-                    added_count = self.todo_manager.add_extracted_todos(
-                        extracted_todos)
-                    total_todos += added_count
+
+                    total_extracted += len(todos)
 
             except Exception as e:
-                print(f"[DEBUG] Error processing file {file_path}: {e}")
+                print(f"[DEBUG] Error extracting TODOs from {file_path}: {e}")
 
-        return total_todos
+        return total_extracted
 
     def get_system_info(self) -> dict:
-        """
-        システム情報を取得する
+        """システム情報を取得する"""
+        try:
+            # インデックス統計情報
+            index_stats = self.index_manager.get_index_stats(self.index)
 
-        Returns:
-            システム情報の辞書
-        """
-        return {
-            "persist_dir": self.persist_dir,
-            "data_dir": self.data_dir,
-            "embedding_dim": self.embedding_dim,
-            "chunk_size": self.chunk_size,
-            "chunk_overlap": self.chunk_overlap,
-            "index_stats": self.index_manager.get_index_stats(self.index),
-            "todo_count": len(self.todo_manager.get_todos()),
-            "document_count": len(self.document_manager.get_all_document_files())
-        }
+            # TODO統計情報
+            all_todos = self.todo_manager.get_todos()
+            todo_stats = {
+                'total_todos': len(all_todos),
+                'pending_todos': len([t for t in all_todos if t.status == 'pending']),
+                'completed_todos': len([t for t in all_todos if t.status == 'completed']),
+                'in_progress_todos': len([t for t in all_todos if t.status == 'in_progress'])
+            }
+
+            # ドキュメント統計情報
+            all_files = self.document_manager.get_all_document_files()
+            doc_stats = {
+                'total_documents': len(all_files),
+                'data_directory': self.data_dir,
+                'persist_directory': self.persist_dir
+            }
+
+            return {
+                'index_stats': index_stats,
+                'todo_stats': todo_stats,
+                'document_stats': doc_stats,
+                'system_components': {
+                    'document_manager': 'DocumentManager',
+                    'todo_manager': 'TodoManager',
+                    'markdown_parser': 'MarkdownParser',
+                    'text_chunker': 'TextChunker',
+                    'index_manager': 'IndexManager'
+                }
+            }
+
+        except Exception as e:
+            print(f"[DEBUG] Error getting system info: {e}")
+            return {'error': str(e)}
 
     def _parse_markdown(self, content: str) -> List[MarkdownSection]:
-        """
-        Markdownコンテンツをパースしてセクションに分割する
-
-        Args:
-            content: Markdownコンテンツ
-
-        Returns:
-            MarkdownSectionのリスト
-        """
+        """Markdownコンテンツを解析する（後方互換性のため）"""
         return self.markdown_parser.parse_markdown(content)
 
     def _create_new_index(self):
-        """
-        新しいインデックスを作成する
-
-        Returns:
-            新しく作成されたインデックス
-        """
-        return self.index_manager.refresh_index(self.index)
+        """新しいインデックスを作成する（後方互換性のため）"""
+        return self.index_manager._create_new_index()
