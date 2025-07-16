@@ -1,5 +1,4 @@
 from typing import List, Dict, Optional
-from dataclasses import dataclass
 from llama_index.core import Document
 from llama_index.core.schema import TextNode
 
@@ -138,7 +137,7 @@ class RAGSystem:
                         "header": section.header,
                         "level": section.level,
                         "total_chunks": len(chunks),
-                        "original_section": section_text,
+                        # "original_section" removed for metadata size limit
                     }
                     nodes.append(node)
 
