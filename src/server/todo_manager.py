@@ -3,7 +3,7 @@ import json
 import hashlib
 import re
 from typing import Optional, List, Dict
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 
 
@@ -20,6 +20,7 @@ class TodoItem:
     source_section: str
     due_date: Optional[str] = None
     tags: Optional[List[str]] = None
+    related_chunk_ids: List[str] = field(default_factory=list)
 
     def __post_init__(self):
         if self.tags is None:
@@ -64,14 +65,20 @@ class TodoManager:
 
         # 様々なTODOパターンを検出
         patterns = [
-            r'(?:TODO|Todo|todo)\s*:?\s*(.+?)(?:\n|$)',
-            r'(?:FIXME|Fixme|fixme)\s*:?\s*(.+?)(?:\n|$)',
-            r'(?:BUG|Bug|bug)\s*:?\s*(.+?)(?:\n|$)',
-            r'(?:HACK|Hack|hack)\s*:?\s*(.+?)(?:\n|$)',
-            r'(?:NOTE|Note|note)\s*:?\s*(.+?)(?:\n|$)',
-            r'(?:XXX|xxx)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:TODO|Todo|todo)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:FIXME|Fixme|fixme)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:BUG|Bug|bug)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:HACK|Hack|hack)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:NOTE|Note|note)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:XXX|xxx)\s*:?\s*(.+?)(?:\n|$)',
             r'- \[ \]\s*(.+?)(?:\n|$)',  # Markdownチェックボックス
-            r'\* \[ \]\s*(.+?)(?:\n|$)'
+            r'- \[x\]\s*(.+?)(?:\n|$)',  # 完了チェックボックス
+            r'^\s*[\*\-]\s*(?:TODO|Todo|todo)\s*:?\s*(.+?)(?:\n|$)',  # リストアイテムのTODO
+            r'^\s*[\*\-]\s*(?:FIXME|Fixme|fixme)\s*:?\s*(.+?)(?:\n|$)',  # リストアイテムのFIXME
+            r'^\s*[\*\-]\s*(?:BUG|Bug|bug)\s*:?\s*(.+?)(?:\n|$)',  # リストアイテムのBUG
+            r'^\s*[\*\-]\s*(?:NOTE|Note|note)\s*:?\s*(.+?)(?:\n|$)',  # リストアイテムのNOTE
+            r'^\s*[\*\-]\s*(?:HACK|Hack|hack)\s*:?\s*(.+?)(?:\n|$)',  # リストアイテムのHACK
+            r'^\s*[\*\-]\s*(?:XXX|xxx)\s*:?\s*(.+?)(?:\n|$)'  # リストアイテムのXXX
         ]
 
         current_time = datetime.now().isoformat()
@@ -81,6 +88,9 @@ class TodoManager:
                                   re.MULTILINE | re.IGNORECASE)
             for match in matches:
                 content = match.group(1).strip()
+                # リストアイテムの場合は最初の'*'や'-'を削除
+                if content.startswith('*') or content.startswith('-'):
+                    content = content[1:].strip()
                 if content and len(content) > 3:  # 短すぎるものは除外
                     # 優先度を推定
                     priority = "medium"
@@ -107,6 +117,48 @@ class TodoManager:
                     )
                     todos.append(todo)
 
+        # 重複を除去（コンテンツが同じまたは類似のTODOを削除）
+        unique_todos = []
+        seen_contents = set()
+        for todo in todos:
+            # TODO:プレフィックスを削除して比較
+            normalized_content = todo.content.replace('TODO:', '').replace('Todo:', '').replace('todo:', '').strip()
+            if normalized_content not in seen_contents:
+                unique_todos.append(todo)
+                seen_contents.add(normalized_content)
+
+        # 締切日を抽出して設定
+        for todo in unique_todos:
+            extracted_due_date = self._extract_due_date_from_text(todo.content)
+            if extracted_due_date and not todo.due_date:
+                todo.due_date = extracted_due_date
+
+        return unique_todos
+
+    def extract_todos_with_chunk_ids(self, text: str, source_file: str, source_section: str) -> List[TodoItem]:
+        """
+        テキストからTODO項目を抽出し、チャンクIDも含める
+        
+        Args:
+            text: 抽出するテキスト
+            source_file: ソースファイル
+            source_section: ソースセクション
+            
+        Returns:
+            チャンクID付きTODO項目のリスト
+        """
+        todos = []
+        
+        # 基本的なTODO抽出
+        base_todos = self.extract_todos_from_text(text, source_file, source_section)
+        
+        # 各TODOにチャンクIDを追加
+        for todo in base_todos:
+            # チャンクIDを生成（セクションIDは仮で1を使用）
+            chunk_id = f"{source_file}:section_1:chunk_0"
+            todo.related_chunk_ids = [chunk_id]
+            todos.append(todo)
+        
         return todos
 
     def get_todos(self, status: Optional[str] = None) -> List[TodoItem]:
@@ -258,3 +310,144 @@ class TodoManager:
             self._save_todos()
 
         return added_count
+
+    def _extract_due_date_from_text(self, text: str) -> Optional[str]:
+        """
+        テキストから締切日を抽出する
+        
+        Args:
+            text: 抽出対象のテキスト
+            
+        Returns:
+            抽出された締切日（ISO形式）またはNone
+        """
+        import re
+        from datetime import datetime, timedelta
+        
+        # 日付パターンの定義
+        date_patterns = [
+            # 明示的な日付形式
+            r'(?:締切|期限|until|by|due)\s*[:：]?\s*(\d{4}[-/]\d{1,2}[-/]\d{1,2})',  # 締切: 2024-12-31, by 2024/12/31
+            r'(?:締切|期限|until|by|due)\s*[:：]?\s*(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # 締切: 31-12-2024, by 31/12/2024
+            r'(?:締切|期限|until|by|due)\s*[:：]?\s*(\d{1,2}月\d{1,2}日)',  # 締切: 12月31日
+            r'(?:締切|期限|until|by|due)\s*[:：]?\s*(\d{4}年\d{1,2}月\d{1,2}日)',  # 締切: 2024年12月31日
+            # 日付＋まで の形式
+            r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})\s*まで',  # 2024-12-31まで, 2024/12/31まで
+            r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})\s*まで',  # 31-12-2024まで, 31/12/2024まで
+            r'(\d{1,2}月\d{1,2}日)\s*まで',  # 12月31日まで
+            r'(\d{4}年\d{1,2}月\d{1,2}日)\s*まで',  # 2024年12月31日まで
+            
+            # 相対的な日付表現
+            r'(?:明日|tomorrow)',  # 明日
+            r'(?:今週|this week)',  # 今週
+            r'(?:来週|next week)',  # 来週
+            r'(?:今月|this month)',  # 今月
+            r'(?:来月|next month)',  # 来月
+            r'(\d+)日後',  # N日後
+            r'(\d+)週間後',  # N週間後
+            
+            # 曜日指定
+            r'(?:月曜|火曜|水曜|木曜|金曜|土曜|日曜)(?:日)?',
+            r'(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)',
+        ]
+        
+        today = datetime.now().date()
+        
+        for pattern in date_patterns:
+            match = re.search(pattern, text, re.IGNORECASE)
+            if match:
+                matched_text = match.group(0).lower()
+                
+                try:
+                    # 明示的な日付形式の処理
+                    if match.groups():
+                        date_str = match.group(1)
+                        
+                        # YYYY-MM-DD または YYYY/MM/DD 形式
+                        if re.match(r'\d{4}[-/]\d{1,2}[-/]\d{1,2}', date_str):
+                            date_str = date_str.replace('/', '-')
+                            return date_str
+                        
+                        # DD-MM-YYYY または DD/MM/YYYY 形式
+                        elif re.match(r'\d{1,2}[-/]\d{1,2}[-/]\d{4}', date_str):
+                            parts = re.split('[-/]', date_str)
+                            return f"{parts[2]}-{parts[1]:0>2}-{parts[0]:0>2}"
+                        
+                        # N月N日 形式
+                        elif '月' in date_str and '日' in date_str:
+                            month_match = re.search(r'(\d{1,2})月', date_str)
+                            day_match = re.search(r'(\d{1,2})日', date_str)
+                            if month_match and day_match:
+                                month = int(month_match.group(1))
+                                day = int(day_match.group(1))
+                                year = today.year
+                                # 指定された月日が今年の過去の場合は来年とする
+                                target_date = datetime(year, month, day).date()
+                                if target_date < today:
+                                    year += 1
+                                return f"{year}-{month:02d}-{day:02d}"
+                        
+                        # YYYY年N月N日 形式
+                        elif '年' in date_str:
+                            year_match = re.search(r'(\d{4})年', date_str)
+                            month_match = re.search(r'(\d{1,2})月', date_str)
+                            day_match = re.search(r'(\d{1,2})日', date_str)
+                            if year_match and month_match and day_match:
+                                year = int(year_match.group(1))
+                                month = int(month_match.group(1))
+                                day = int(day_match.group(1))
+                                return f"{year}-{month:02d}-{day:02d}"
+                        
+                        # N日後
+                        elif '日後' in matched_text:
+                            days = int(match.group(1))
+                            target_date = today + timedelta(days=days)
+                            return target_date.isoformat()
+                        
+                        # N週間後
+                        elif '週間後' in matched_text:
+                            weeks = int(match.group(1))
+                            target_date = today + timedelta(weeks=weeks)
+                            return target_date.isoformat()
+                    
+                    # 相対的な日付表現の処理
+                    elif '明日' in matched_text or 'tomorrow' in matched_text:
+                        target_date = today + timedelta(days=1)
+                        return target_date.isoformat()
+                    
+                    elif '今週' in matched_text or 'this week' in matched_text:
+                        # 今週の金曜日を設定
+                        days_until_friday = (4 - today.weekday()) % 7
+                        if days_until_friday == 0 and today.weekday() == 4:  # 今日が金曜日
+                            days_until_friday = 7
+                        target_date = today + timedelta(days=days_until_friday)
+                        return target_date.isoformat()
+                    
+                    elif '来週' in matched_text or 'next week' in matched_text:
+                        # 来週の金曜日を設定
+                        days_until_next_friday = ((4 - today.weekday()) % 7) + 7
+                        target_date = today + timedelta(days=days_until_next_friday)
+                        return target_date.isoformat()
+                    
+                    elif '今月' in matched_text or 'this month' in matched_text:
+                        # 今月末を設定
+                        if today.month == 12:
+                            target_date = datetime(today.year + 1, 1, 1).date() - timedelta(days=1)
+                        else:
+                            target_date = datetime(today.year, today.month + 1, 1).date() - timedelta(days=1)
+                        return target_date.isoformat()
+                    
+                    elif '来月' in matched_text or 'next month' in matched_text:
+                        # 来月末を設定
+                        if today.month == 11:
+                            target_date = datetime(today.year + 1, 1, 1).date() - timedelta(days=1)
+                        elif today.month == 12:
+                            target_date = datetime(today.year + 1, 2, 1).date() - timedelta(days=1)
+                        else:
+                            target_date = datetime(today.year, today.month + 2, 1).date() - timedelta(days=1)
+                        return target_date.isoformat()
+                
+                except (ValueError, IndexError):
+                    continue
+        
+        return None

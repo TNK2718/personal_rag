@@ -1,6 +1,8 @@
 from typing import List, Dict, Optional
 from llama_index.core import Document
 from llama_index.core.schema import TextNode
+from datetime import datetime
+import hashlib
 
 # 分割したクラスをインポート
 from document_manager import DocumentManager
@@ -118,9 +120,9 @@ class RAGSystem:
         relative_path = self.document_manager.get_relative_path(doc_id)
 
         for i, section in enumerate(sections):
-            # セクションの内容をチャンクに分割
+            # セクションの内容をチャンクに分割（箇条書きを考慮）
             section_text = f"# {section.header}\n\n{section.content}"
-            chunks = self.text_chunker.smart_split_text(section_text)
+            chunks = self.text_chunker.split_text_by_bullet_items(section_text)
 
             for j, chunk in enumerate(chunks):
                 if chunk.strip():
@@ -139,6 +141,13 @@ class RAGSystem:
                         "total_chunks": len(chunks),
                         # "original_section" removed for metadata size limit
                     }
+
+                    # TODOメタデータを追加
+                    if self._chunk_has_todo(chunk):
+                        node.metadata["has_todo"] = True
+                        node.metadata["todo_content"] = self._extract_todo_content_from_chunk(
+                            chunk)
+
                     nodes.append(node)
 
         return nodes
@@ -492,9 +501,11 @@ class RAGSystem:
     def extract_todos_from_documents(self) -> int:
         """ドキュメントからTODOを抽出する"""
         total_extracted = 0
+        all_extracted_todos = []  # 抽出したTODOを一時保存
 
         # 全ドキュメントファイルを取得
         all_files = self.document_manager.get_all_document_files()
+        print(f"[DEBUG] Found {len(all_files)} files to process")
 
         for file_path in all_files:
             try:
@@ -504,26 +515,205 @@ class RAGSystem:
                 # ファイルパスを相対パスに変換
                 relative_path = self.document_manager.get_relative_path(
                     file_path)
+                print(f"[DEBUG] Processing file: {relative_path}")
 
                 # Markdownを解析してセクションごとに処理
                 sections = self.markdown_parser.parse_markdown(content)
+                print(
+                    f"[DEBUG] Found {len(sections)} sections in {relative_path}")
 
                 for i, section in enumerate(sections):
                     section_name = f"{section.header} (Level {section.level})"
 
-                    # セクションからTODOを抽出
-                    todos = self.todo_manager.extract_todos_from_text(
+                    # TODOセクションの場合、デバッグ情報を出力
+                    if 'TODO' in section.header.upper():
+                        print(f"[DEBUG] Found TODO section: {section.header}")
+                        print(
+                            f"[DEBUG] Section content length: {len(section.content)}")
+                        print(
+                            f"[DEBUG] Section content preview: {section.content[:50]}...")
+
+                    # チャンクからTODOメタデータを抽出（メインの抽出方法）
+                    chunk_todos = self._extract_todos_from_chunks(
+                        section.content, relative_path, section_name, i
+                    )
+                    
+                    # チャンクで抽出されなかったTODOをテキスト抽出で補完
+                    text_todos = self.todo_manager.extract_todos_from_text(
                         section.content,
                         relative_path,
                         section_name
                     )
-
-                    total_extracted += len(todos)
+                    
+                    # チャンクTODOが抽出された場合はそちらを優先、そうでなければテキストTODOを使用
+                    if chunk_todos:
+                        print(
+                            f"[DEBUG] Found {len(chunk_todos)} TODOs from chunk metadata in section '{section.header}'")
+                        for todo in chunk_todos:
+                            print(f"[DEBUG] Chunk TODO: {todo.content}")
+                        all_extracted_todos.extend(chunk_todos)
+                        total_extracted += len(chunk_todos)
+                    elif text_todos:
+                        print(
+                            f"[DEBUG] Found {len(text_todos)} TODOs from text extraction in section '{section.header}'")
+                        for todo in text_todos:
+                            print(f"[DEBUG] Text TODO: {todo.content}")
+                        all_extracted_todos.extend(text_todos)
+                        total_extracted += len(text_todos)
 
             except Exception as e:
                 print(f"[DEBUG] Error extracting TODOs from {file_path}: {e}")
 
-        return total_extracted
+        print(f"[DEBUG] Total extracted TODOs: {total_extracted}")
+        print(
+            f"[DEBUG] All extracted TODOs: {[todo.content for todo in all_extracted_todos]}")
+
+        # 抽出したTODOを追加（重複チェック付き）
+        if all_extracted_todos:
+            added_count = self.todo_manager.add_extracted_todos(
+                all_extracted_todos)
+            print(
+                f"[DEBUG] Added {added_count} new TODOs out of {total_extracted} extracted")
+            return added_count
+
+        print(f"[DEBUG] No TODOs extracted")
+        return 0
+
+    def _extract_todos_from_chunks(self, text: str, relative_path: str, section_name: str, section_id: int) -> List[TodoItem]:
+        """
+        チャンクのメタデータからTODOを抽出する
+
+        Args:
+            text: セクションのテキスト
+            relative_path: 相対ファイルパス
+            section_name: セクション名
+            section_id: セクションID
+
+        Returns:
+            抽出されたTODO項目のリスト
+        """
+        todos = []
+
+        # チャンクのメタデータを作成
+        chunks_with_metadata = self.text_chunker.create_chunks_with_todo_metadata(
+            text, relative_path, section_id
+        )
+
+        for chunk_data in chunks_with_metadata:
+            metadata = chunk_data['metadata']
+
+            # TODOメタデータを持つチャンクを検出
+            if metadata.get('has_todo'):
+                todo_content = metadata.get('todo_content', '')
+
+                if todo_content:
+                    # 既存のTODOマネージャーを使用して作成
+                    current_time = datetime.now().isoformat()
+                    todo_id = hashlib.md5(
+                        f"{relative_path}:{section_name}:{todo_content}".encode()
+                    ).hexdigest()[:8]
+
+                    # TODOコンテンツから締切日を抽出
+                    extracted_due_date = self.todo_manager._extract_due_date_from_text(todo_content)
+
+                    todo = TodoItem(
+                        id=todo_id,
+                        content=todo_content,
+                        status="pending",
+                        priority=metadata.get('todo_priority', 'medium'),
+                        created_at=current_time,
+                        updated_at=current_time,
+                        source_file=relative_path,
+                        source_section=section_name,
+                        due_date=extracted_due_date,
+                        related_chunk_ids=[metadata.get('chunk_id', '')]
+                    )
+                    todos.append(todo)
+
+        return todos
+
+    def _chunk_has_todo(self, chunk_text: str) -> bool:
+        """
+        チャンクにTODOが含まれているかをチェックする
+
+        Args:
+            chunk_text: チャンクのテキスト
+
+        Returns:
+            TODOが含まれている場合True
+        """
+        todo_patterns = [
+            r'\b(?:TODO|Todo|todo)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:FIXME|Fixme|fixme)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:BUG|Bug|bug)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:HACK|Hack|hack)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:NOTE|Note|note)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:XXX|xxx)\s*:?\s*(.+?)(?:\n|$)',
+            r'- \[ \]\s*(.+?)(?:\n|$)',  # Markdownチェックボックス
+            # r'- \[x\]\s*(.+?)(?:\n|$)',  # 完了チェックボックス
+            # リストアイテムのTODO
+            r'^\s*[\*\-]\s*(?:TODO|Todo|todo)\s*:?\s*(.+?)(?:\n|$)',
+            # リストアイテムのFIXME
+            r'^\s*[\*\-]\s*(?:FIXME|Fixme|fixme)\s*:?\s*(.+?)(?:\n|$)',
+            # リストアイテムのBUG
+            r'^\s*[\*\-]\s*(?:BUG|Bug|bug)\s*:?\s*(.+?)(?:\n|$)',
+            # リストアイテムのNOTE
+            r'^\s*[\*\-]\s*(?:NOTE|Note|note)\s*:?\s*(.+?)(?:\n|$)',
+            # リストアイテムのHACK
+            r'^\s*[\*\-]\s*(?:HACK|Hack|hack)\s*:?\s*(.+?)(?:\n|$)',
+            r'^\s*[\*\-]\s*(?:XXX|xxx)\s*:?\s*(.+?)(?:\n|$)'  # リストアイテムのXXX
+        ]
+
+        import re
+        for pattern in todo_patterns:
+            if re.search(pattern, chunk_text, re.MULTILINE | re.IGNORECASE):
+                return True
+        return False
+
+    def _extract_todo_content_from_chunk(self, chunk_text: str) -> str:
+        """
+        チャンクからTODOコンテンツを抽出する
+
+        Args:
+            chunk_text: チャンクのテキスト
+
+        Returns:
+            抽出されたTODOコンテンツ
+        """
+        todo_patterns = [
+            r'\b(?:TODO|Todo|todo)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:FIXME|Fixme|fixme)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:BUG|Bug|bug)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:HACK|Hack|hack)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:NOTE|Note|note)\s*:?\s*(.+?)(?:\n|$)',
+            r'\b(?:XXX|xxx)\s*:?\s*(.+?)(?:\n|$)',
+            r'- \[ \]\s*(.+?)(?:\n|$)',  # Markdownチェックボックス
+            r'- \[x\]\s*(.+?)(?:\n|$)',  # 完了チェックボックス
+            # リストアイテムのTODO
+            r'^\s*[\*\-]\s*(?:TODO|Todo|todo)\s*:?\s*(.+?)(?:\n|$)',
+            # リストアイテムのFIXME
+            r'^\s*[\*\-]\s*(?:FIXME|Fixme|fixme)\s*:?\s*(.+?)(?:\n|$)',
+            # リストアイテムのBUG
+            r'^\s*[\*\-]\s*(?:BUG|Bug|bug)\s*:?\s*(.+?)(?:\n|$)',
+            # リストアイテムのNOTE
+            r'^\s*[\*\-]\s*(?:NOTE|Note|note)\s*:?\s*(.+?)(?:\n|$)',
+            # リストアイテムのHACK
+            r'^\s*[\*\-]\s*(?:HACK|Hack|hack)\s*:?\s*(.+?)(?:\n|$)',
+            r'^\s*[\*\-]\s*(?:XXX|xxx)\s*:?\s*(.+?)(?:\n|$)'  # リストアイテムのXXX
+        ]
+
+        import re
+        for pattern in todo_patterns:
+            match = re.search(pattern, chunk_text,
+                              re.MULTILINE | re.IGNORECASE)
+            if match:
+                content = match.group(1).strip()
+                # リストアイテムの場合は最初の'*'や'-'を削除
+                if content.startswith('*') or content.startswith('-'):
+                    content = content[1:].strip()
+                return content
+
+        return ""
 
     def get_system_info(self) -> dict:
         """システム情報を取得する"""

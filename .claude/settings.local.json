@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run pytest:*)",
+      "Bash(uv run:*)",
+      "Bash(curl:*)",
+      "Bash(tasklist:*)",
+      "Bash(python:*)",
+      "Bash(pkill:*)",
+      "Bash(taskkill:*)",
+      "Bash(ls:*)"
+    ],
+    "deny": []
+  }
+}

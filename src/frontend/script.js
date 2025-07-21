@@ -35,6 +35,7 @@ class RAGInterface {
         this.statusFilter = document.getElementById('statusFilter');
         this.todoInput = document.getElementById('todoInput');
         this.prioritySelect = document.getElementById('prioritySelect');
+        this.dueDateInput = document.getElementById('dueDateInput');
         this.addTodoBtn = document.getElementById('addTodoBtn');
         this.todoLoadingIndicator = document.getElementById('todoLoadingIndicator');
         this.todoList = document.getElementById('todoList');
@@ -415,17 +416,24 @@ class RAGInterface {
         }
 
         const priority = this.prioritySelect.value;
+        const dueDate = this.dueDateInput.value || null;
 
         try {
+            const requestBody = {
+                content: content,
+                priority: priority
+            };
+
+            if (dueDate) {
+                requestBody.due_date = dueDate;
+            }
+
             const response = await fetch(`${this.baseUrl}/api/todos`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json'
                 },
-                body: JSON.stringify({
-                    content: content,
-                    priority: priority
-                })
+                body: JSON.stringify(requestBody)
             });
 
             const data = await response.json();
@@ -435,6 +443,7 @@ class RAGInterface {
             }
 
             this.todoInput.value = '';
+            this.dueDateInput.value = '';
             await this.loadTodos();
         } catch (error) {
             alert(`TODO追加エラー: ${error.message}`);
@@ -491,9 +500,16 @@ class RAGInterface {
 
     renderTodos() {
         const statusFilter = this.statusFilter.value;
-        const filteredTodos = statusFilter ?
+        let filteredTodos = statusFilter ?
             this.todos.filter(todo => todo.status === statusFilter) :
             this.todos;
+
+        // 新しい順（updated_atの降順）でソート
+        filteredTodos.sort((a, b) => {
+            const dateA = new Date(a.updated_at || a.created_at);
+            const dateB = new Date(b.updated_at || b.created_at);
+            return dateB - dateA; // 降順
+        });
 
         if (filteredTodos.length === 0) {
             this.todoList.innerHTML = '<div class="empty-todos">メモからTODOを抽出するか、手動で追加してください。</div>';
@@ -506,6 +522,25 @@ class RAGInterface {
             const todoItem = document.createElement('div');
             todoItem.className = `todo-item priority-${todo.priority} status-${todo.status}`;
 
+            // 締切情報の処理
+            let dueDateDisplay = '';
+            if (todo.due_date) {
+                const dueDate = new Date(todo.due_date);
+                const today = new Date();
+                const diffDays = Math.ceil((dueDate - today) / (1000 * 60 * 60 * 24));
+                
+                let dueDateClass = '';
+                if (diffDays < 0) {
+                    dueDateClass = 'overdue';
+                } else if (diffDays <= 1) {
+                    dueDateClass = 'due-soon';
+                } else if (diffDays <= 7) {
+                    dueDateClass = 'due-this-week';
+                }
+                
+                dueDateDisplay = `<span class="due-date ${dueDateClass}">締切: ${dueDate.toLocaleDateString('ja-JP')}</span>`;
+            }
+
             todoItem.innerHTML = `
                 <input type="checkbox" class="todo-checkbox" ${todo.status === 'completed' ? 'checked' : ''} 
                        onchange="ragInterface.toggleTodoStatus('${todo.id}')">
@@ -514,8 +549,10 @@ class RAGInterface {
                     <div class="todo-meta">
                         <span class="status-badge ${todo.status}">${this.getStatusText(todo.status)}</span>
                         <span class="priority-badge ${todo.priority}">${this.getPriorityText(todo.priority)}</span>
+                        ${dueDateDisplay}
                         <span>ソース: <a href="#" class="source-link" data-file-path="${todo.source_file}" onclick="ragInterface.openFileInEditor('${todo.source_file}', event)">${this.getFileNameFromPath(todo.source_file)}</a> > ${todo.source_section}</span>
                         <span>作成: ${new Date(todo.created_at).toLocaleString('ja-JP')}</span>
+                        ${todo.updated_at !== todo.created_at ? `<span>更新: ${new Date(todo.updated_at).toLocaleString('ja-JP')}</span>` : ''}
                     </div>
                 </div>
                 <div class="todo-actions">

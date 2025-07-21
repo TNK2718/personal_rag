@@ -1,4 +1,5 @@
-from typing import List, Optional
+from typing import List, Optional, Dict, Any
+import re
 
 
 class TextChunker:
@@ -84,7 +85,6 @@ class TextChunker:
             max_chunk_size = self.chunk_size
 
         # 日本語の文区切りを考慮した正規表現
-        import re
         sentences = re.split(r'[。！？\.\!\?]', text)
 
         chunks = []
@@ -191,6 +191,214 @@ class TextChunker:
             chunks = self.split_text_by_length(text, chunk_size, overlap)
 
         return chunks
+
+    def split_text_with_todo_boundaries(self, text: str) -> List[str]:
+        """
+        TODOパターンを境界としてテキストを分割する
+        
+        Args:
+            text: 分割するテキスト
+            
+        Returns:
+            TODOパターンで分割されたテキストのリスト
+        """
+        if not text.strip():
+            return []
+        
+        # TODOパターンを定義（より厳密に）
+        todo_patterns = [
+            r'\b(?:TODO|Todo|todo)\s*:\s*(.+?)(?=\n|$)',
+            r'\b(?:FIXME|Fixme|fixme)\s*:\s*(.+?)(?=\n|$)',
+            r'\b(?:BUG|Bug|bug)\s*:\s*(.+?)(?=\n|$)',
+            r'\b(?:HACK|Hack|hack)\s*:\s*(.+?)(?=\n|$)',
+            r'\b(?:NOTE|Note|note)\s*:\s*(.+?)(?=\n|$)',
+            r'\b(?:XXX|xxx)\s*:\s*(.+?)(?=\n|$)',
+            r'- \[ \]\s*(.+?)(?=\n|$)',  # Markdownチェックボックス
+            r'- \[x\]\s*(.+?)(?=\n|$)',  # 完了チェックボックス
+            r'^\s*[\*\-]\s*(?:TODO|Todo|todo)\s*:?\s*(.+?)(?=\n|$)',  # リストアイテムのTODO
+            r'^\s*[\*\-]\s*(?:FIXME|Fixme|fixme)\s*:?\s*(.+?)(?=\n|$)',  # リストアイテムのFIXME
+            r'^\s*[\*\-]\s*(?:BUG|Bug|bug)\s*:?\s*(.+?)(?=\n|$)',  # リストアイテムのBUG
+            r'^\s*[\*\-]\s*(?:NOTE|Note|note)\s*:?\s*(.+?)(?=\n|$)',  # リストアイテムのNOTE
+            r'^\s*[\*\-]\s*(?:HACK|Hack|hack)\s*:?\s*(.+?)(?=\n|$)',  # リストアイテムのHACK
+            r'^\s*[\*\-]\s*(?:XXX|xxx)\s*:?\s*(.+?)(?=\n|$)'  # リストアイテムのXXX
+        ]
+        
+        # 全てのTODOパターンを検索
+        todo_matches = []
+        for pattern in todo_patterns:
+            for match in re.finditer(pattern, text, re.MULTILINE | re.IGNORECASE):
+                todo_matches.append((match.start(), match.end(), match.group(0)))
+        
+        # 位置でソート
+        todo_matches.sort(key=lambda x: x[0])
+        
+        if not todo_matches:
+            # TODOがない場合は通常のチャンク分割
+            return self.smart_split_text(text)
+        
+        chunks = []
+        last_end = 0
+        
+        for start, end, todo_text in todo_matches:
+            # TODO前のテキスト
+            before_todo = text[last_end:start].strip()
+            if before_todo:
+                chunks.extend(self.smart_split_text(before_todo))
+            
+            # TODO部分（行全体を含む）
+            line_start = text.rfind('\n', 0, start) + 1  # 行の始まり
+            line_end = text.find('\n', end)  # 行の終わり
+            if line_end == -1:
+                line_end = len(text)
+            
+            todo_chunk = text[line_start:line_end].strip()
+            if todo_chunk:
+                chunks.append(todo_chunk)
+            
+            last_end = line_end
+        
+        # 最後のTODO後のテキスト
+        after_last_todo = text[last_end:].strip()
+        if after_last_todo:
+            chunks.extend(self.smart_split_text(after_last_todo))
+        
+        return chunks
+
+    def split_text_by_bullet_items(self, text: str) -> List[str]:
+        """
+        箇条書きを1つ1チャンクに分割する
+        
+        Args:
+            text: 分割するテキスト
+            
+        Returns:
+            箇条書きで分割されたテキストのリスト
+        """
+        if not text.strip():
+            return []
+        
+        # 箇条書きパターンを定義
+        bullet_pattern = r'^(\s*[*\-+]\s+.+?)(?=\n\s*[*\-+]\s+|\n\s*$|\Z)'
+        
+        # 箇条書きを検索
+        bullet_matches = list(re.finditer(bullet_pattern, text, re.MULTILINE | re.DOTALL))
+        
+        if not bullet_matches:
+            # 箇条書きがない場合は通常のチャンク分割
+            return self.smart_split_text(text)
+        
+        chunks = []
+        last_end = 0
+        
+        for match in bullet_matches:
+            # 箇条書き前のテキスト
+            before_bullet = text[last_end:match.start()].strip()
+            if before_bullet:
+                chunks.extend(self.smart_split_text(before_bullet))
+            
+            # 箇条書き項目（1つの項目を1チャンクに）
+            bullet_item = match.group(1).strip()
+            if bullet_item:
+                chunks.append(bullet_item)
+            
+            last_end = match.end()
+        
+        # 最後の箇条書き後のテキスト
+        after_last_bullet = text[last_end:].strip()
+        if after_last_bullet:
+            chunks.extend(self.smart_split_text(after_last_bullet))
+        
+        return chunks
+
+    def create_chunks_with_todo_metadata(self, text: str, file_path: str, section_id: int) -> List[Dict[str, Any]]:
+        """
+        TODOメタデータ付きのチャンクを作成する
+        
+        Args:
+            text: 分割するテキスト
+            file_path: ファイルパス
+            section_id: セクションID
+            
+        Returns:
+            メタデータ付きチャンクのリスト
+        """
+        if not text.strip():
+            return []
+        
+        # 箇条書きを考慮したチャンク分割
+        chunks = self.split_text_by_bullet_items(text)
+        chunks_with_metadata = []
+        
+        # TODOパターンを定義（より厳密に）
+        todo_patterns = [
+            (r'\b(?:TODO|Todo|todo)\s*:\s*(.+?)(?=\n|$)', 'TODO'),
+            (r'\b(?:FIXME|Fixme|fixme)\s*:\s*(.+?)(?=\n|$)', 'FIXME'),
+            (r'\b(?:BUG|Bug|bug)\s*:\s*(.+?)(?=\n|$)', 'BUG'),
+            (r'\b(?:HACK|Hack|hack)\s*:\s*(.+?)(?=\n|$)', 'HACK'),
+            (r'\b(?:NOTE|Note|note)\s*:\s*(.+?)(?=\n|$)', 'NOTE'),
+            (r'\b(?:XXX|xxx)\s*:\s*(.+?)(?=\n|$)', 'XXX'),
+            (r'- \[ \]\s*(.+?)(?=\n|$)', 'CHECKBOX'),
+            (r'- \[x\]\s*(.+?)(?=\n|$)', 'CHECKBOX_COMPLETED'),
+            (r'^\s*[\*\-]\s*(?:TODO|Todo|todo)\s*:?\s*(.+?)(?=\n|$)', 'TODO'),
+            (r'^\s*[\*\-]\s*(?:FIXME|Fixme|fixme)\s*:?\s*(.+?)(?=\n|$)', 'FIXME'),
+            (r'^\s*[\*\-]\s*(?:BUG|Bug|bug)\s*:?\s*(.+?)(?=\n|$)', 'BUG'),
+            (r'^\s*[\*\-]\s*(?:NOTE|Note|note)\s*:?\s*(.+?)(?=\n|$)', 'NOTE'),
+            (r'^\s*[\*\-]\s*(?:HACK|Hack|hack)\s*:?\s*(.+?)(?=\n|$)', 'HACK'),
+            (r'^\s*[\*\-]\s*(?:XXX|xxx)\s*:?\s*(.+?)(?=\n|$)', 'XXX')
+        ]
+        
+        for i, chunk_text in enumerate(chunks):
+            chunk_id = f"{file_path}:section_{section_id}:chunk_{i}"
+            
+            # TODOの検出
+            has_todo = False
+            todo_type = None
+            todo_content = None
+            todo_priority = 'medium'
+            
+            for pattern, pattern_type in todo_patterns:
+                match = re.search(pattern, chunk_text, re.MULTILINE | re.IGNORECASE)
+                if match:
+                    has_todo = True
+                    todo_type = pattern_type
+                    todo_content = match.group(1).strip()
+                    
+                    # 優先度の推定
+                    urgent_words = ['urgent', '急', '緊急', 'asap']
+                    later_words = ['later', '後で', '将来']
+                    
+                    if any(word in chunk_text.lower() for word in urgent_words):
+                        todo_priority = 'high'
+                    elif any(word in chunk_text.lower() for word in later_words):
+                        todo_priority = 'low'
+                    
+                    break
+            
+            # コンテキストキーワードの抽出
+            context_keywords = []
+            if has_todo and todo_content:
+                # 簡単なキーワード抽出（カタカナ、英単語、重要そうな日本語）
+                keywords = re.findall(r'[ァ-ヶー]+|[A-Za-z]+|[重要|実装|修正|バグ|機能|API|エンドポイント]', chunk_text)
+                context_keywords = list(set(keywords))
+            
+            metadata = {
+                'chunk_id': chunk_id,
+                'file_path': file_path,
+                'section_id': section_id,
+                'chunk_index': i,
+                'has_todo': has_todo,
+                'todo_type': todo_type,
+                'todo_content': todo_content,
+                'todo_priority': todo_priority,
+                'context_keywords': context_keywords
+            }
+            
+            chunks_with_metadata.append({
+                'text': chunk_text,
+                'metadata': metadata
+            })
+        
+        return chunks_with_metadata
 
     def get_chunk_metadata(self, chunks: List[str]) -> dict:
         """

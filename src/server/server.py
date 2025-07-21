@@ -16,7 +16,10 @@ app = Flask(__name__)
 CORS(app)
 
 # ログの設定
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 # RAGシステムのインスタンスを初期化
@@ -74,6 +77,7 @@ def initialize_rag_system():
 @app.route('/api/health', methods=['GET'])
 def health_check():
     """ヘルスチェックエンドポイント"""
+    logger.info("ヘルスチェックエンドポイントが呼ばれました")
     return jsonify({
         'status': 'ok',
         'rag_system_ready': rag_system is not None
@@ -166,7 +170,25 @@ def get_todos():
             return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
 
         status = request.args.get('status')
+        
+        # デバッグ情報を追加
+        logger.info(f"TODO取得エンドポイントが呼ばれました。status={status}")
+        logger.info(f"TODO manager persist_dir: {rag_system.todo_manager.persist_dir}")
+        logger.info(f"TODO file path: {rag_system.todo_manager.todo_file_path}")
+        
+        # ファイルの存在確認
+        import os
+        if os.path.exists(rag_system.todo_manager.todo_file_path):
+            logger.info(f"TODO file exists, size: {os.path.getsize(rag_system.todo_manager.todo_file_path)} bytes")
+        else:
+            logger.warning("TODO file does not exist")
+        
         todos = rag_system.get_todos(status)
+        logger.info(f"Retrieved {len(todos)} TODOs from manager")
+
+        # 新しい順（updated_atの降順）でソート
+        from datetime import datetime
+        todos.sort(key=lambda todo: datetime.fromisoformat(todo.updated_at or todo.created_at), reverse=True)
 
         # dataclassをdictに変換
         todos_dict = [asdict(todo) for todo in todos]
@@ -195,9 +217,16 @@ def create_todo():
         priority = data.get('priority', 'medium')
         source_file = data.get('source_file', 'manual')
         source_section = data.get('source_section', 'manual')
+        due_date = data.get('due_date', None)
 
         todo = rag_system.add_todo(
             content, priority, source_file, source_section)
+        
+        # 締切日が指定されている場合は更新
+        if due_date:
+            updated_todo = rag_system.update_todo(todo.id, due_date=due_date)
+            if updated_todo:
+                todo = updated_todo
 
         return jsonify(asdict(todo)), 201
     except Exception as e:
@@ -269,10 +298,15 @@ def aggregate_todos():
 def extract_todos():
     """メモ書きからTODOを抽出するエンドポイント"""
     try:
+        logger.info("TODO抽出エンドポイントが呼ばれました")
+        
         if rag_system is None:
+            logger.error("RAGシステムが初期化されていません")
             return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
 
+        logger.info("RAGシステムからTODO抽出を開始します")
         new_todos_count = rag_system.extract_todos_from_documents()
+        logger.info(f"TODO抽出が完了しました。結果: {new_todos_count}個")
 
         return jsonify({
             'message': f'{new_todos_count}個の新しいTODOが抽出されました',
@@ -280,6 +314,8 @@ def extract_todos():
         })
     except Exception as e:
         logger.error(f"TODO抽出中にエラーが発生しました: {e}")
+        import traceback
+        logger.error(f"詳細なエラー情報: {traceback.format_exc()}")
         return jsonify({'error': f'TODO抽出に失敗しました: {str(e)}'}), 500
 
 

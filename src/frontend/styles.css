@@ -385,6 +385,15 @@ body {
     min-width: 60px;
 }
 
+.due-date-input {
+    padding: 12px;
+    border: 1px solid #ddd;
+    border-radius: 6px;
+    background: white;
+    font-size: 14px;
+    min-width: 150px;
+}
+
 #addTodoBtn {
     padding: 12px 20px;
     background: #3498db;
@@ -562,6 +571,30 @@ body {
 .priority-badge.low {
     background: #eaeded;
     color: #5d6d7e;
+}
+
+/* 締切情報 */
+.due-date {
+    padding: 2px 8px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: bold;
+    margin-left: 5px;
+}
+
+.due-date.overdue {
+    background: #fadbd8;
+    color: #c0392b;
+}
+
+.due-date.due-soon {
+    background: #fdf2e9;
+    color: #e67e22;
+}
+
+.due-date.due-this-week {
+    background: #fff3cd;
+    color: #856404;
 }
 
 @media (max-width: 768px) {
