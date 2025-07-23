@@ -6,183 +6,142 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RAG システム - 引用元付き回答</title>
     <link rel="stylesheet" href="styles.css">
+    <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+    <!-- HTML5 Native + Font Awesome -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
 </head>
 
 <body>
     <div class="container">
-        <header class="header">
+        <header class="main-header">
             <h1>RAG システム</h1>
             <p>質問に対する回答と引用元、TODO管理、メモ編集、チャンク可視化を提供します</p>
-            <div class="nav-tabs">
-                <button class="nav-tab active" data-tab="search">RAG検索</button>
-                <button class="nav-tab" data-tab="todos">TODO管理</button>
-                <button class="nav-tab" data-tab="editor">メモエディタ</button>
-                <button class="nav-tab" data-tab="chunks">チャンク可視化</button>
-            </div>
         </header>
 
-        <div id="searchTab" class="tab-content active">
-            <div class="search-section">
-                <div class="input-group">
-                    <input type="text" id="queryInput" placeholder="質問を入力してください..." autocomplete="off">
-                    <button id="searchButton">検索</button>
-                </div>
-            </div>
-
-            <div id="loadingIndicator" class="loading-indicator" style="display: none;">
-                <div class="spinner"></div>
-                <span>回答を生成中...</span>
-            </div>
-
-            <div id="resultContainer" class="result-container" style="display: none;">
-                <div class="answer-section">
-                    <h2>回答</h2>
-                    <div id="answerContent" class="answer-content"></div>
-                </div>
-
-                <div class="sources-section">
-                    <h3>引用元</h3>
-                    <div id="sourcesContent" class="sources-content"></div>
-                </div>
-            </div>
-
-            <div id="errorContainer" class="error-container" style="display: none;">
-                <h3>エラー</h3>
-                <div id="errorContent" class="error-content"></div>
-            </div>
-
-            <div class="history-section">
-                <h3>検索履歴</h3>
-                <div id="historyContent" class="history-content">
-                    <p class="empty-history">検索履歴はありません</p>
-                </div>
-            </div>
-        </div>
-
-        <div id="todosTab" class="tab-content">
-            <div class="todo-section">
-                <div class="todo-controls">
-                    <button id="extractTodosBtn" class="extract-btn">TODOをメモから抽出</button>
-                    <select id="statusFilter" class="status-filter">
-                        <option value="">全部</option>
-                        <option value="pending">未完了</option>
-                        <option value="in_progress">進行中</option>
-                        <option value="completed">完了</option>
-                    </select>
-                </div>
-
-                <div class="add-todo-section">
+        <div class="main-layout">
+            <!-- 左側パネル: 検索とTODO -->
+            <div class="left-panel">
+                <!-- 検索セクション -->
+                <div class="search-section">
+                    <h2>📝 RAG検索</h2>
                     <div class="input-group">
-                        <input type="text" id="todoInput" placeholder="新しいTODOを入力..." autocomplete="off">
-                        <select id="prioritySelect" class="priority-select">
-                            <option value="medium">中</option>
-                            <option value="high">高</option>
-                            <option value="low">低</option>
+                        <input type="text" id="queryInput" placeholder="質問を入力してください..." autocomplete="off">
+                        <button id="searchButton">検索</button>
+                    </div>
+                    <button id="insertTodoToSearchBtn" class="insert-todo-btn">TODOを検索窓へ</button>
+                </div>
+
+                <div id="loadingIndicator" class="loading-indicator" style="display: none;">
+                    <div class="spinner"></div>
+                    <span>回答を生成中...</span>
+                </div>
+
+                <div id="resultContainer" class="result-container" style="display: none;">
+                    <div class="answer-section">
+                        <h3>回答</h3>
+                        <div id="answerContent" class="answer-content"></div>
+                    </div>
+                </div>
+
+                <div id="errorContainer" class="error-container" style="display: none;">
+                    <h3>エラー</h3>
+                    <div id="errorContent" class="error-content"></div>
+                </div>
+
+                <!-- TODOセクション -->
+                <div class="todo-section">
+                    <h2>✅ TODO管理</h2>
+                    <div class="todo-controls">
+                        <button id="extractTodosBtn" class="extract-btn">TODOをメモから抽出</button>
+                        <select id="statusFilter" class="status-filter">
+                            <option value="">全部</option>
+                            <option value="pending">未完了</option>
+                            <option value="in_progress">進行中</option>
+                            <option value="completed">完了</option>
                         </select>
-                        <input type="date" id="dueDateInput" class="due-date-input" title="締切日 (オプション)">
-                        <button id="addTodoBtn">TODO追加</button>
+                    </div>
+
+                    <div class="add-todo-section">
+                        <div class="input-group">
+                            <input type="text" id="todoInput" placeholder="新しいTODOを入力..." autocomplete="off">
+                            <select id="prioritySelect" class="priority-select">
+                                <option value="medium">中</option>
+                                <option value="high">高</option>
+                                <option value="low">低</option>
+                            </select>
+                            <input type="date" id="dueDateInput" class="due-date-input" title="締切日 (オプション)">
+                            <button id="addTodoBtn">TODO追加</button>
+                        </div>
+                    </div>
+
+                    <div id="todoLoadingIndicator" class="loading-indicator" style="display: none;">
+                        <div class="spinner"></div>
+                        <span>処理中...</span>
+                    </div>
+
+                    <div id="todoList" class="todo-list">
+                        <div class="empty-todos">メモからTODOを抽出するか、手動で追加してください。</div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 中央パネル: 引用元と検索履歴 -->
+            <div class="center-panel">
+                <div class="sources-section">
+                    <h3>📄 引用元</h3>
+                    <div id="sourcesContent" class="sources-content">
+                        <p class="empty-sources">検索を実行すると引用元が表示されます</p>
                     </div>
                 </div>
 
-                <div id="todoLoadingIndicator" class="loading-indicator" style="display: none;">
-                    <div class="spinner"></div>
-                    <span>処理中...</span>
-                </div>
-
-                <div id="todoList" class="todo-list">
-                    <div class="empty-todos">メモからTODOを抽出するか、手動で追加してください。</div>
+                <div class="history-section">
+                    <h3>📚 検索履歴</h3>
+                    <div id="historyContent" class="history-content">
+                        <p class="empty-history">検索履歴はありません</p>
+                    </div>
                 </div>
             </div>
-        </div>
 
-        <div id="editorTab" class="tab-content">
-            <div class="editor-section">
-                <div class="editor-controls">
+            <!-- 右側パネル: ファイルエクスプローラー -->
+            <div class="right-panel">
+                <div class="file-explorer-section">
+                    <h2>📁 ドキュメントエクスプローラー</h2>
                     <div class="file-controls">
-                        <button id="newFileBtn" class="new-file-btn">新規ファイル</button>
-                        <button id="saveFileBtn" class="save-file-btn" disabled>保存</button>
-                        <button id="popoutEditorBtn" class="popout-btn">別ウィンドウで開く</button>
+                        <button id="newFileBtn" class="new-file-btn">📄 新規ファイル</button>
+                        <button id="newFolderBtn" class="new-folder-btn">📁 新規フォルダ</button>
+                        <button id="refreshFilesBtn" class="refresh-files-btn">🔄 更新</button>
+                        <input type="text" id="fileSearchInput" class="file-search-input" placeholder="ファイル検索..." />
                     </div>
-                    <div class="file-info" id="fileInfo">
-                        <span id="currentFilePath">ファイルが選択されていません</span>
-                        <span id="fileStatus"></span>
-                    </div>
-                </div>
 
-                <div class="file-explorer">
-                    <h3>📁 メモファイル</h3>
-                    <div id="fileTree" class="file-tree">
-                        <div class="loading-files">ファイルを読み込み中...</div>
-                    </div>
-                </div>
-
-                <div class="editor-container">
-                    <div class="editor-toolbar">
-                        <button class="toolbar-btn" data-action="bold">太字</button>
-                        <button class="toolbar-btn" data-action="italic">斜体</button>
-                        <button class="toolbar-btn" data-action="header">見出し</button>
-                        <button class="toolbar-btn" data-action="list">リスト</button>
-                        <button class="toolbar-btn" data-action="code">コード</button>
-                    </div>
-                    <textarea id="markdownEditor" placeholder="Markdownを入力してください...
-# 見出し1
-## 見出し2
-- リスト項目
-**太字** *斜体*
-`コード`"></textarea>
-
-                    <div class="editor-preview" id="markdownPreview">
-                        <h3>プレビュー</h3>
-                        <div id="previewContent">ここにプレビューが表示されます</div>
+                    <div class="file-explorer">
+                        <div id="fileTree">
+                            <div class="loading-files">ファイルを読み込み中...</div>
+                        </div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <div id="chunksTab" class="tab-content">
-            <div class="chunks-section">
-                <div class="chunks-controls">
-                    <select id="chunkFileSelect" class="file-select">
-                        <option value="">ファイルを選択...</option>
-                    </select>
-                    <button id="analyzeChunksBtn" class="analyze-btn">チャンク解析</button>
-                    <button id="refreshIndexBtn" class="refresh-btn">インデックス更新</button>
-                </div>
-
-                <div id="chunksLoadingIndicator" class="loading-indicator" style="display: none;">
-                    <div class="spinner"></div>
-                    <span>解析中...</span>
-                </div>
-
-                <div class="chunks-container">
-                    <div class="chunks-overview">
-                        <h3>チャンク概要</h3>
-                        <div id="chunksStats" class="chunks-stats">
-                            <div class="stat-item">
-                                <span class="stat-label">総チャンク数:</span>
-                                <span class="stat-value" id="totalChunks">-</span>
-                            </div>
-                            <div class="stat-item">
-                                <span class="stat-label">ヘッダー数:</span>
-                                <span class="stat-value" id="headerChunks">-</span>
-                            </div>
-                            <div class="stat-item">
-                                <span class="stat-label">コンテンツ数:</span>
-                                <span class="stat-value" id="contentChunks">-</span>
-                            </div>
+            <!-- ビューアーパネル: ドキュメント表示 -->
+            <div class="viewer-panel">
+                <h2>📄 ドキュメントビューアー</h2>
+                <div class="document-viewer" id="documentViewer" style="display: none;">
+                    <div class="document-header">
+                        <span id="documentTitle">ドキュメント</span>
+                        <div class="document-actions">
+                            <button id="editDocumentBtn" class="edit-doc-btn">編集</button>
+                            <button id="closeDocumentBtn" class="close-doc-btn">×</button>
                         </div>
                     </div>
-
-                    <div class="chunks-list">
-                        <h3>チャンク詳細</h3>
-                        <div id="chunksList" class="chunks-items">
-                            <div class="empty-chunks">ファイルを選択してチャンク解析を実行してください</div>
-                        </div>
-                    </div>
+                    <div id="documentContent" class="document-content"></div>
+                </div>
+                <div id="defaultViewerContent"
+                    style="text-align: center; color: #7f8c8d; font-style: italic; padding: 40px;">
+                    📄 ファイルを選択すると内容が表示されます
                 </div>
             </div>
         </div>
     </div>
+
 
     <script src="script.js"></script>
 </body>

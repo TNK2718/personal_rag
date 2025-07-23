@@ -170,25 +170,29 @@ def get_todos():
             return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
 
         status = request.args.get('status')
-        
+
         # デバッグ情報を追加
         logger.info(f"TODO取得エンドポイントが呼ばれました。status={status}")
-        logger.info(f"TODO manager persist_dir: {rag_system.todo_manager.persist_dir}")
-        logger.info(f"TODO file path: {rag_system.todo_manager.todo_file_path}")
-        
+        logger.info(
+            f"TODO manager persist_dir: {rag_system.todo_manager.persist_dir}")
+        logger.info(
+            f"TODO file path: {rag_system.todo_manager.todo_file_path}")
+
         # ファイルの存在確認
         import os
         if os.path.exists(rag_system.todo_manager.todo_file_path):
-            logger.info(f"TODO file exists, size: {os.path.getsize(rag_system.todo_manager.todo_file_path)} bytes")
+            logger.info(
+                f"TODO file exists, size: {os.path.getsize(rag_system.todo_manager.todo_file_path)} bytes")
         else:
             logger.warning("TODO file does not exist")
-        
+
         todos = rag_system.get_todos(status)
         logger.info(f"Retrieved {len(todos)} TODOs from manager")
 
         # 新しい順（updated_atの降順）でソート
         from datetime import datetime
-        todos.sort(key=lambda todo: datetime.fromisoformat(todo.updated_at or todo.created_at), reverse=True)
+        todos.sort(key=lambda todo: datetime.fromisoformat(
+            todo.updated_at or todo.created_at), reverse=True)
 
         # dataclassをdictに変換
         todos_dict = [asdict(todo) for todo in todos]
@@ -221,7 +225,7 @@ def create_todo():
 
         todo = rag_system.add_todo(
             content, priority, source_file, source_section)
-        
+
         # 締切日が指定されている場合は更新
         if due_date:
             updated_todo = rag_system.update_todo(todo.id, due_date=due_date)
@@ -299,7 +303,7 @@ def extract_todos():
     """メモ書きからTODOを抽出するエンドポイント"""
     try:
         logger.info("TODO抽出エンドポイントが呼ばれました")
-        
+
         if rag_system is None:
             logger.error("RAGシステムが初期化されていません")
             return jsonify({'error': 'RAGシステムが初期化されていません'}), 500
