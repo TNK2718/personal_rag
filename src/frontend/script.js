@@ -7,7 +7,6 @@ class RAGInterface {
         this.baseUrl = window.location.origin;
         this.todos = [];
         this.lastSearchResult = null; // 最後の検索結果を保存
-        this.selectedTodoForSearch = null; // 検索に挿入するTODO
         this.currentDocumentPath = null; // 現在表示中のドキュメント
     }
 
@@ -22,7 +21,6 @@ class RAGInterface {
         this.errorContainer = document.getElementById('errorContainer');
         this.errorContent = document.getElementById('errorContent');
         this.historyContent = document.getElementById('historyContent');
-        this.insertTodoToSearchBtn = document.getElementById('insertTodoToSearchBtn');
 
         // TODO要素
         this.extractTodosBtn = document.getElementById('extractTodosBtn');
@@ -56,7 +54,6 @@ class RAGInterface {
                 this.handleSearch();
             }
         });
-        this.insertTodoToSearchBtn.addEventListener('click', () => this.insertTodoToSearch());
 
         // TODOイベント
         this.extractTodosBtn.addEventListener('click', () => this.extractTodos());
@@ -304,15 +301,6 @@ class RAGInterface {
         this.initializeFileExplorer();
     }
 
-    // TODO検索窓挿入機能
-    insertTodoToSearch() {
-        if (this.selectedTodoForSearch) {
-            this.queryInput.value = this.selectedTodoForSearch.content;
-            this.queryInput.focus();
-        } else {
-            alert('検索に挿入するTODOを選択してください。');
-        }
-    }
 
     // TODO機能
     async loadTodos() {
@@ -418,27 +406,6 @@ class RAGInterface {
         }
     }
 
-    async deleteTodo(todoId) {
-        if (!confirm('TODOを削除しますか？')) {
-            return;
-        }
-
-        try {
-            const response = await fetch(`${this.baseUrl}/api/todos/${todoId}`, {
-                method: 'DELETE'
-            });
-
-            const data = await response.json();
-
-            if (data.error) {
-                throw new Error(data.error);
-            }
-
-            await this.loadTodos();
-        } catch (error) {
-            alert(`TODO削除エラー: ${error.message}`);
-        }
-    }
 
     filterTodos() {
         this.renderTodos();
@@ -497,7 +464,6 @@ class RAGInterface {
                         <span class="priority-badge ${todo.priority}">${this.getPriorityText(todo.priority)}</span>
                         ${dueDateDisplay}
                         <span>ソース: <a href="#" class="source-link todo-source-link" data-file-path="${todo.source_file}" data-source-section="${todo.source_section}">${this.getFileNameFromPath(todo.source_file)}</a> > ${todo.source_section}</span>
-                        <button class="select-todo-btn" onclick="ragInterface.selectTodoForSearch('${todo.id}')" title="検索窓に挿入">→検索</button>
                         <span>作成: ${new Date(todo.created_at).toLocaleString('ja-JP')}</span>
                         ${todo.updated_at !== todo.created_at ? `<span>更新: ${new Date(todo.updated_at).toLocaleString('ja-JP')}</span>` : ''}
                     </div>
@@ -508,7 +474,7 @@ class RAGInterface {
                         <option value="medium" ${todo.priority === 'medium' ? 'selected' : ''}>中</option>
                         <option value="high" ${todo.priority === 'high' ? 'selected' : ''}>高</option>
                     </select>
-                    <button class="todo-action-btn delete-btn" onclick="ragInterface.deleteTodo('${todo.id}')">Delete</button>
+                    <button class="todo-action-btn search-btn" onclick="ragInterface.sendTodoToSearch('${todo.id}')" title="このTODOを検索窓に送る">→検索</button>
                 </div>
             `;
 
@@ -527,7 +493,7 @@ class RAGInterface {
                 const filePath = link.getAttribute('data-file-path');
                 const sourceSection = link.getAttribute('data-source-section');
                 console.log('TODO ソースリンククリック:', filePath, 'セクション:', sourceSection);
-                
+
                 if (sourceSection && sourceSection !== 'manual') {
                     // セクション情報がある場合はハイライト表示
                     this.loadFileContentWithSectionHighlight(filePath, sourceSection);
@@ -559,7 +525,6 @@ class RAGInterface {
     getStatusText(status) {
         const statusMap = {
             'pending': '未完了',
-            'in_progress': '進行中',
             'completed': '完了'
         };
         return statusMap[status] || status;
@@ -580,21 +545,25 @@ class RAGInterface {
         return parts[parts.length - 1] || filePath;
     }
 
-    selectTodoForSearch(todoId) {
+    sendTodoToSearch(todoId) {
         const todo = this.todos.find(t => t.id === todoId);
         if (todo) {
-            this.selectedTodoForSearch = todo;
-            // 他の選択を解除
-            document.querySelectorAll('.select-todo-btn').forEach(btn => {
-                btn.classList.remove('selected');
-                btn.textContent = '→検索';
-            });
-            // 選択されたボタンをハイライト
-            event.target.classList.add('selected');
-            event.target.textContent = '選択中';
+            // TODOの内容を検索窓に直接設定
+            this.queryInput.value = todo.content;
+            this.queryInput.focus();
 
-            // 検索ボタンを有効化
-            this.insertTodoToSearchBtn.disabled = false;
+            // 視覚的フィードバック（一時的にボタンの色を変更）
+            const button = event.target;
+            const originalText = button.textContent;
+            const originalClass = button.className;
+
+            button.textContent = '送信済み';
+            button.classList.add('sent');
+
+            setTimeout(() => {
+                button.textContent = originalText;
+                button.className = originalClass;
+            }, 1500);
         }
     }
 
@@ -684,7 +653,7 @@ class RAGInterface {
             // パスを構築（最初の空文字を除去し、残りを結合）
             const folderPath = pathIds.length > 1 ? pathIds.slice(1).join('/') : '';
             const apiUrl = folderPath ? `${this.baseUrl}/api/browse/${folderPath}` : `${this.baseUrl}/api/browse`;
-            
+
             const response = await fetch(apiUrl);
             const data = await response.json();
 
@@ -741,7 +710,7 @@ class RAGInterface {
         // js-fileexplorerのentryオブジェクトからパスと情報を取得
         let filePath;
         let fileInfo;
-        
+
         if (typeof entry === 'string') {
             filePath = entry;
         } else if (entry && entry.id !== undefined) {
@@ -790,7 +759,7 @@ class RAGInterface {
         try {
             // 現在のフォルダパスを取得
             const currentPath = this.getCurrentFolderPath();
-            
+
             const response = await fetch(`${this.baseUrl}/api/files/create`, {
                 method: 'POST',
                 headers: {
@@ -1027,7 +996,7 @@ class RAGInterface {
             const partialText = words.slice(0, Math.min(3, words.length)).join(' ');
             const partialPattern = this.escapeRegExp(partialText).replace(/\\\s+/g, '\\s+');
             const partialRegex = new RegExp(`(${partialPattern})`, 'i');
-            
+
             const partialMatch = fullContent.match(partialRegex);
             if (partialMatch) {
                 const beforeText = fullContent.substring(0, partialMatch.index);
@@ -1044,10 +1013,10 @@ class RAGInterface {
     highlightSectionInMarkdown(fullContent, sectionText) {
         console.log('highlightSectionInMarkdown 呼び出し');
         console.log('検索対象セクション:', sectionText);
-        
+
         // セクションテキストをクリーンアップ
         const cleanSectionText = sectionText.trim();
-        
+
         // マークダウンヘッダー形式のパターンを試す（より柔軟な検索）
         const headerPatterns = [
             new RegExp(`^(#{1,6})\\s*${this.escapeRegExp(cleanSectionText)}\\s*$`, 'im'),  // # Title形式
@@ -1058,12 +1027,12 @@ class RAGInterface {
         for (const pattern of headerPatterns) {
             const match = fullContent.match(pattern);
             console.log(`パターン "${pattern}" のマッチ結果:`, match ? match[0] : 'なし');
-            
+
             if (match) {
                 const beforeText = fullContent.substring(0, match.index);
                 const matchedText = match[0];
                 const afterText = fullContent.substring(match.index + matchedText.length);
-                
+
                 return beforeText + `<span class="section-highlight">${matchedText}</span>` + afterText;
             }
         }
@@ -1074,7 +1043,7 @@ class RAGInterface {
             const keywordPattern = new RegExp(`(${keywords.map(this.escapeRegExp).join('|')})`, 'gi');
             const keywordMatch = fullContent.match(keywordPattern);
             console.log(`キーワードマッチ結果:`, keywordMatch);
-            
+
             if (keywordMatch) {
                 // 最初のキーワードをハイライト
                 return fullContent.replace(keywordPattern, '<span class="section-highlight">$1</span>');
@@ -1093,16 +1062,16 @@ class RAGInterface {
     insertSectionHighlightInOriginalText(fullContent, targetText) {
         console.log('insertSectionHighlightInOriginalText 呼び出し');
         console.log('対象テキスト:', targetText);
-        
+
         // 空白の違いを許容する正規表現を作成
         const flexiblePattern = this.escapeRegExp(targetText).replace(/\\\s+/g, '\\s+');
         const regex = new RegExp(`(${flexiblePattern})`, 'i');
-        
+
         console.log('正規表現パターン:', flexiblePattern);
 
         const match = fullContent.match(regex);
         console.log('マッチ結果:', match ? match[0] : 'マッチなし');
-        
+
         if (match) {
             const beforeText = fullContent.substring(0, match.index);
             const matchedText = match[0];
@@ -1462,7 +1431,7 @@ function initializeRAGInterface() {
         console.log('RAGInterface は既に初期化済みです');
         return;
     }
-    
+
     console.log('RAGInterface を初期化します');
     const ragInterface = new RAGInterface();
     ragInterface.initialize();
@@ -1481,7 +1450,7 @@ window.addEventListener('load', () => {
 document.addEventListener('DOMContentLoaded', () => {
     console.log('DOMContentLoaded イベント発火');
     console.log('FileExplorer利用可能:', !!window.FileExplorer);
-    
+
     if (window.FileExplorer) {
         initializeRAGInterface();
     }
