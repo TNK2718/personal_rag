@@ -267,6 +267,37 @@ body {
     overflow: hidden;
 }
 
+.file-explorer-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+}
+
+.file-explorer-header h2 {
+    margin: 0;
+}
+
+.new-file-btn {
+    background: #27ae60;
+    color: white;
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    font-weight: 500;
+    transition: background-color 0.2s;
+}
+
+.new-file-btn:hover {
+    background: #219a52;
+}
+
+.new-file-btn:active {
+    background: #1e8449;
+}
+
 .file-controls {
     display: grid;
     grid-template-columns: 1fr 1fr;
@@ -699,6 +730,17 @@ body {
     box-shadow: 0 0 8px rgba(255, 193, 7, 0.4);
 }
 
+/* セクションハイライトスタイル */
+.section-highlight {
+    background-color: #d1ecf1 !important;
+    border: 2px solid #17a2b8 !important;
+    border-radius: 4px !important;
+    padding: 2px 4px !important;
+    margin: -2px -4px !important;
+    animation: section-highlight-pulse 2s ease-in-out;
+    box-shadow: 0 0 8px rgba(23, 162, 184, 0.4);
+}
+
 @keyframes highlight-pulse {
     0% {
         background-color: #fff3cd;
@@ -713,6 +755,23 @@ body {
     100% {
         background-color: #fff3cd;
         box-shadow: 0 0 8px rgba(255, 193, 7, 0.4);
+    }
+}
+
+@keyframes section-highlight-pulse {
+    0% {
+        background-color: #d1ecf1;
+        box-shadow: 0 0 8px rgba(23, 162, 184, 0.4);
+    }
+
+    50% {
+        background-color: #bee5eb;
+        box-shadow: 0 0 16px rgba(23, 162, 184, 0.8);
+    }
+
+    100% {
+        background-color: #d1ecf1;
+        box-shadow: 0 0 8px rgba(23, 162, 184, 0.4);
     }
 }
 
@@ -1920,3 +1979,255 @@ body {
 }
 
 /* チャンク可視化は削除（現在は使用しないため） */
+
+/* js-fileexplorer ダークテーマカスタマイズ */
+.file-explorer-widget {
+    background: #252526 !important;
+    color: #cccccc !important;
+    border: 1px solid #464647 !important;
+    border-radius: 6px !important;
+    font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif !important;
+    font-size: 13px !important;
+}
+
+/* js-fileexplorer ツールバー */
+.fe_toolbar {
+    background: #2d2d30 !important;
+    border-bottom: 1px solid #464647 !important;
+    padding: 8px !important;
+}
+
+.fe_toolbar button {
+    background: #0e639c !important;
+    color: #ffffff !important;
+    border: 1px solid #0e639c !important;
+    border-radius: 3px !important;
+    padding: 4px 8px !important;
+    margin-right: 4px !important;
+    font-size: 12px !important;
+}
+
+.fe_toolbar button:hover {
+    background: #1177bb !important;
+    border-color: #1177bb !important;
+}
+
+.fe_toolbar button:disabled {
+    background: #555555 !important;
+    color: #999999 !important;
+    border-color: #555555 !important;
+    cursor: not-allowed !important;
+}
+
+/* js-fileexplorer メインコンテナ */
+.fe_main_wrap {
+    background: #252526 !important;
+}
+
+/* js-fileexplorer フォルダ・ファイルアイテム */
+.fe_folder,
+.fe_file {
+    color: #cccccc !important;
+    padding: 4px 8px !important;
+    border-radius: 3px !important;
+    cursor: pointer !important;
+}
+
+.fe_folder:hover,
+.fe_file:hover {
+    background: #2a2d2e !important;
+    color: #ffffff !important;
+}
+
+.fe_folder.fe_selected,
+.fe_file.fe_selected {
+    background: #094771 !important;
+    color: #ffffff !important;
+}
+
+/* js-fileexplorer フォルダアイコン */
+.fe_folder .fe_folder_icon {
+    color: #dcb67a !important;
+    margin-right: 6px !important;
+}
+
+.fe_folder.fe_opened .fe_folder_icon {
+    color: #dcb67a !important;
+}
+
+/* js-fileexplorer ファイルアイコン */
+.fe_file .fe_file_icon {
+    margin-right: 6px !important;
+    color: #cccccc !important;
+}
+
+/* ファイルタイプ別アイコン色 */
+.fe_file[data-ext="md"] .fe_file_icon,
+.fe_file[data-ext="markdown"] .fe_file_icon {
+    color: #519aba !important;
+}
+
+.fe_file[data-ext="txt"] .fe_file_icon {
+    color: #cccccc !important;
+}
+
+.fe_file[data-ext="json"] .fe_file_icon {
+    color: #dcb67a !important;
+}
+
+.fe_file[data-ext="py"] .fe_file_icon {
+    color: #599eff !important;
+}
+
+.fe_file[data-ext="js"] .fe_file_icon {
+    color: #f7df1e !important;
+}
+
+.fe_file[data-ext="pdf"] .fe_file_icon {
+    color: #dc3545 !important;
+}
+
+.fe_file[data-ext="jpg"] .fe_file_icon,
+.fe_file[data-ext="jpeg"] .fe_file_icon,
+.fe_file[data-ext="png"] .fe_file_icon,
+.fe_file[data-ext="gif"] .fe_file_icon {
+    color: #28a745 !important;
+}
+
+/* js-fileexplorer スクロールバー */
+.fe_main_wrap::-webkit-scrollbar {
+    width: 12px;
+}
+
+.fe_main_wrap::-webkit-scrollbar-track {
+    background: #2d2d30;
+}
+
+.fe_main_wrap::-webkit-scrollbar-thumb {
+    background: #555555;
+    border-radius: 6px;
+}
+
+.fe_main_wrap::-webkit-scrollbar-thumb:hover {
+    background: #777777;
+}
+
+/* js-fileexplorer ステータスバー */
+.fe_statusbar {
+    background: #2d2d30 !important;
+    border-top: 1px solid #464647 !important;
+    color: #cccccc !important;
+    padding: 4px 8px !important;
+    font-size: 11px !important;
+}
+
+/* js-fileexplorer コンテキストメニュー */
+.fe_context_menu {
+    background: #2d2d30 !important;
+    border: 1px solid #464647 !important;
+    color: #cccccc !important;
+    border-radius: 4px !important;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.3) !important;
+}
+
+.fe_context_menu_item {
+    padding: 6px 12px !important;
+    cursor: pointer !important;
+}
+
+.fe_context_menu_item:hover {
+    background: #094771 !important;
+    color: #ffffff !important;
+}
+
+.fe_context_menu_item.fe_disabled {
+    color: #999999 !important;
+    cursor: not-allowed !important;
+}
+
+.fe_context_menu_item.fe_disabled:hover {
+    background: transparent !important;
+    color: #999999 !important;
+}
+
+/* js-fileexplorer プログレスバー */
+.fe_progress_wrap {
+    background: #2d2d30 !important;
+    border: 1px solid #464647 !important;
+}
+
+.fe_progress_bar {
+    background: #0e639c !important;
+}
+
+/* js-fileexplorer ダイアログ */
+.fe_dialog {
+    background: #2d2d30 !important;
+    border: 1px solid #464647 !important;
+    color: #cccccc !important;
+    border-radius: 6px !important;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
+.fe_dialog_header {
+    background: #383838 !important;
+    border-bottom: 1px solid #464647 !important;
+    color: #ffffff !important;
+    padding: 12px 15px !important;
+}
+
+.fe_dialog_content {
+    padding: 15px !important;
+}
+
+.fe_dialog input[type="text"],
+.fe_dialog textarea {
+    background: #383838 !important;
+    border: 1px solid #464647 !important;
+    color: #cccccc !important;
+    border-radius: 3px !important;
+    padding: 6px 8px !important;
+}
+
+.fe_dialog input[type="text"]:focus,
+.fe_dialog textarea:focus {
+    border-color: #0e639c !important;
+    outline: none !important;
+    box-shadow: 0 0 4px rgba(14, 99, 156, 0.3) !important;
+}
+
+.fe_dialog button {
+    background: #0e639c !important;
+    color: #ffffff !important;
+    border: 1px solid #0e639c !important;
+    border-radius: 3px !important;
+    padding: 6px 12px !important;
+    margin-right: 8px !important;
+    cursor: pointer !important;
+}
+
+.fe_dialog button:hover {
+    background: #1177bb !important;
+    border-color: #1177bb !important;
+}
+
+.fe_dialog button.fe_secondary {
+    background: #555555 !important;
+    border-color: #555555 !important;
+}
+
+.fe_dialog button.fe_secondary:hover {
+    background: #777777 !important;
+    border-color: #777777 !important;
+}
+
+/* 古いファイルエクスプローラースタイルを削除または無効化 */
+#fileTree {
+    display: none;
+    /* 古いエクスプローラーを非表示 */
+}
+
+.file-controls {
+    display: none;
+    /* 古いコントロールボタンを非表示 */
+}

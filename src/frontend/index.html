@@ -6,6 +6,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>RAG システム - 引用元付き回答</title>
     <link rel="stylesheet" href="styles.css">
+    <!-- js-fileexplorer CSS -->
+    <link rel="stylesheet" href="file-explorer.css">
     <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
     <!-- HTML5 Native + Font Awesome -->
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
@@ -105,18 +107,14 @@
             <!-- 右側パネル: ファイルエクスプローラー -->
             <div class="right-panel">
                 <div class="file-explorer-section">
-                    <h2>📁 ドキュメントエクスプローラー</h2>
-                    <div class="file-controls">
-                        <button id="newFileBtn" class="new-file-btn">📄 新規ファイル</button>
-                        <button id="newFolderBtn" class="new-folder-btn">📁 新規フォルダ</button>
-                        <button id="refreshFilesBtn" class="refresh-files-btn">🔄 更新</button>
-                        <input type="text" id="fileSearchInput" class="file-search-input" placeholder="ファイル検索..." />
+                    <div class="file-explorer-header">
+                        <h2>📁 ドキュメントエクスプローラー</h2>
+                        <button id="newFileBtn" class="new-file-btn" title="新しいマークダウンファイルを作成">
+                            ➕ 新規作成
+                        </button>
                     </div>
-
-                    <div class="file-explorer">
-                        <div id="fileTree">
-                            <div class="loading-files">ファイルを読み込み中...</div>
-                        </div>
+                    <!-- js-fileexplorer integration -->
+                    <div id="fileExplorer" class="file-explorer-widget" style="height: 400px; position: relative;">
                     </div>
                 </div>
             </div>
@@ -142,7 +140,8 @@
         </div>
     </div>
 
-
+    <!-- js-fileexplorer JS (script.jsより前に読み込む) -->
+    <script src="file-explorer.js"></script>
     <script src="script.js"></script>
 </body>
 

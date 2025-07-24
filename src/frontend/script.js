@@ -34,20 +34,16 @@ class RAGInterface {
         this.todoLoadingIndicator = document.getElementById('todoLoadingIndicator');
         this.todoList = document.getElementById('todoList');
 
-        // ファイルエクスプローラー要素
-        this.fileTree = document.getElementById('fileTree');
-        this.newFileBtn = document.getElementById('newFileBtn');
-        this.newFolderBtn = document.getElementById('newFolderBtn');
-        this.refreshFilesBtn = document.getElementById('refreshFilesBtn');
-        this.fileSearchInput = document.getElementById('fileSearchInput');
+        // ドキュメントビューアー要素
         this.documentViewer = document.getElementById('documentViewer');
         this.documentTitle = document.getElementById('documentTitle');
         this.documentContent = document.getElementById('documentContent');
         this.editDocumentBtn = document.getElementById('editDocumentBtn');
         this.closeDocumentBtn = document.getElementById('closeDocumentBtn');
 
-        // Fancytree instance
-        this.jsTreeInstance = null;
+        // js-fileexplorer要素
+        this.fileExplorerElement = document.getElementById('fileExplorer');
+        this.fileExplorer = null; // js-fileexplorerインスタンス
         this.allFiles = [];
 
     }
@@ -72,13 +68,9 @@ class RAGInterface {
             }
         });
 
-        // ファイルエクスプローラーイベント
-        this.newFileBtn.addEventListener('click', () => this.createNewFile());
-        this.newFolderBtn.addEventListener('click', () => this.createNewFolder());
-        this.refreshFilesBtn.addEventListener('click', () => this.loadFileList());
+        // ドキュメントビューアーイベント
         this.editDocumentBtn.addEventListener('click', () => this.editCurrentDocument());
         this.closeDocumentBtn.addEventListener('click', () => this.closeDocumentViewer());
-        this.fileSearchInput.addEventListener('input', (e) => this.searchFiles(e.target.value));
 
     }
 
@@ -303,8 +295,13 @@ class RAGInterface {
     initialize() {
         // TODOを読み込み
         this.loadTodos();
-        // ファイル一覧を読み込み
-        this.loadFileList();
+        // 新規ファイル作成ボタンのイベントリスナーを追加（FileExplorer初期化前に1回だけ）
+        if (!this.newFileButtonSetup) {
+            this.setupNewFileButton();
+            this.newFileButtonSetup = true;
+        }
+        // js-fileexplorerを初期化
+        this.initializeFileExplorer();
     }
 
     // TODO検索窓挿入機能
@@ -499,7 +496,7 @@ class RAGInterface {
                         <span class="status-badge ${todo.status}">${this.getStatusText(todo.status)}</span>
                         <span class="priority-badge ${todo.priority}">${this.getPriorityText(todo.priority)}</span>
                         ${dueDateDisplay}
-                        <span>ソース: <a href="#" class="source-link" data-file-path="${todo.source_file}" onclick="ragInterface.openFileInDocumentViewer('${todo.source_file}', event)">${this.getFileNameFromPath(todo.source_file)}</a> > ${todo.source_section}</span>
+                        <span>ソース: <a href="#" class="source-link todo-source-link" data-file-path="${todo.source_file}" data-source-section="${todo.source_section}">${this.getFileNameFromPath(todo.source_file)}</a> > ${todo.source_section}</span>
                         <button class="select-todo-btn" onclick="ragInterface.selectTodoForSearch('${todo.id}')" title="検索窓に挿入">→検索</button>
                         <span>作成: ${new Date(todo.created_at).toLocaleString('ja-JP')}</span>
                         ${todo.updated_at !== todo.created_at ? `<span>更新: ${new Date(todo.updated_at).toLocaleString('ja-JP')}</span>` : ''}
@@ -516,6 +513,29 @@ class RAGInterface {
             `;
 
             this.todoList.appendChild(todoItem);
+        });
+
+        // TODOソースリンクのイベントリスナーを追加
+        this.setupTodoSourceLinks();
+    }
+
+    setupTodoSourceLinks() {
+        const todoSourceLinks = document.querySelectorAll('.todo-source-link');
+        todoSourceLinks.forEach(link => {
+            link.addEventListener('click', (event) => {
+                event.preventDefault();
+                const filePath = link.getAttribute('data-file-path');
+                const sourceSection = link.getAttribute('data-source-section');
+                console.log('TODO ソースリンククリック:', filePath, 'セクション:', sourceSection);
+                
+                if (sourceSection && sourceSection !== 'manual') {
+                    // セクション情報がある場合はハイライト表示
+                    this.loadFileContentWithSectionHighlight(filePath, sourceSection);
+                } else {
+                    // セクション情報がない場合は通常表示
+                    this.loadFileContent(filePath);
+                }
+            });
         });
     }
 
@@ -579,6 +599,7 @@ class RAGInterface {
     }
 
     openFileInDocumentViewer(filePath, event) {
+        console.log('openFileInDocumentViewer 呼び出し:', filePath);
         event.preventDefault();
         this.loadFileContent(filePath);
     }
@@ -600,10 +621,71 @@ class RAGInterface {
         this.todoLoadingIndicator.style.display = 'none';
     }
 
-    // エディタ機能
-    async loadFileList() {
+    // js-fileexplorer初期化
+    initializeFileExplorer() {
+        console.log('FileExplorer初期化開始');
+        console.log('fileExplorerElement:', this.fileExplorerElement);
+        console.log('window.FileExplorer:', window.FileExplorer);
+
+        if (!this.fileExplorerElement) {
+            console.error('FileExplorer要素が見つかりません');
+            return;
+        }
+
+        if (!window.FileExplorer) {
+            console.error('FileExplorerクラスが見つかりません。ライブラリが正しく読み込まれていません。');
+            this.fileExplorerElement.innerHTML = '<div class="error">ライブラリの読み込みに失敗しました</div>';
+            return;
+        }
+
+        // 既存のFileExplorerインスタンスがあれば破棄
+        if (this.fileExplorer) {
+            console.log('既存のFileExplorerを破棄');
+            if (this.fileExplorer.Destroy) {
+                this.fileExplorer.Destroy();
+            }
+            this.fileExplorer = null;
+        }
+
+        // FileExplorer要素をクリア
+        this.fileExplorerElement.innerHTML = '';
+
+        const options = {
+            initpath: [
+                ['', 'ドキュメント', { canmodify: true }]
+            ],
+            onrefresh: (folder, required) => {
+                console.log('onrefresh呼び出し:', folder, required);
+                this.refreshFileExplorer(folder, required);
+            },
+            onopenfile: (folder, entry) => {
+                console.log('onopenfile呼び出し（ダブルクリック）:', folder, entry);
+                this.openFileInViewer(entry);
+            }
+        };
+
         try {
-            const response = await fetch(`${this.baseUrl}/api/files`);
+            console.log('FileExplorer初期化実行:', this.fileExplorerElement, options);
+            // 正しい初期化方法
+            this.fileExplorer = new window.FileExplorer(this.fileExplorerElement, options);
+            console.log('FileExplorer初期化成功:', this.fileExplorer);
+        } catch (error) {
+            console.error('FileExplorer初期化エラー:', error);
+            this.fileExplorerElement.innerHTML = '<div class="error">ファイルエクスプローラーの初期化に失敗しました: ' + error.message + '</div>';
+        }
+    }
+
+    // ファイルエクスプローラーのリフレッシュ処理
+    async refreshFileExplorer(folder, required) {
+        try {
+            const pathIds = folder.GetPathIDs();
+            console.log('リフレッシュ要求:', pathIds);
+
+            // パスを構築（最初の空文字を除去し、残りを結合）
+            const folderPath = pathIds.length > 1 ? pathIds.slice(1).join('/') : '';
+            const apiUrl = folderPath ? `${this.baseUrl}/api/browse/${folderPath}` : `${this.baseUrl}/api/browse`;
+            
+            const response = await fetch(apiUrl);
             const data = await response.json();
 
             if (data.error) {
@@ -611,190 +693,164 @@ class RAGInterface {
             }
 
             this.allFiles = data.files;
-            this.populateExplorer(data.files);
+
+            // ファイル構造をjs-fileexplorer形式に変換
+            const entries = this.convertFilesToExplorerFormat(data.files);
+            console.log('変換されたエントリ:', entries);
+
+            // フォルダを更新
+            folder.SetEntries(entries);
+
         } catch (error) {
             console.error('ファイル一覧の読み込みに失敗:', error);
-            this.showFileTreeError('ファイル一覧の読み込みに失敗しました');
+            folder.SetEntries([]); // エラー時は空にする
         }
     }
 
-    populateExplorer(files) {
-        if (!files || files.length === 0) {
-            this.fileTree.innerHTML = '<div class="no-files">ファイルが見つかりません</div>';
-            return;
-        }
-
-        // ファイル構造を構築
-        const tree = this.buildFileTree(files);
-
-        // エクスプローラーHTMLを生成
-        this.fileTree.innerHTML = this.generateExplorerHTML(tree);
-
-        // イベントリスナーを設定
-        this.setupExplorerEvents();
-    }
-
-    buildFileTree(files) {
-        const tree = {};
+    // ファイル形式をjs-fileexplorer用に変換
+    convertFilesToExplorerFormat(files) {
+        const entries = [];
 
         files.forEach(file => {
             const pathParts = file.path.split('/').filter(part => part.length > 0);
-            let currentLevel = tree;
+            const fileName = pathParts[pathParts.length - 1] || file.path || 'Unknown';
+            const isFolder = file.type === 'folder';
 
-            // フォルダ部分を処理
-            for (let i = 0; i < pathParts.length - 1; i++) {
-                const folderName = pathParts[i];
-                if (!currentLevel[folderName]) {
-                    currentLevel[folderName] = {
-                        type: 'folder',
-                        children: {}
-                    };
-                }
-                currentLevel = currentLevel[folderName].children;
-            }
+            // js-fileexplorer形式のエントリ（オブジェクト形式）
+            entries.push({
+                id: file.path || '',
+                name: fileName,
+                type: isFolder ? 'folder' : 'file',
+                size: file.size || 0,
+                modified: file.modified || new Date().toISOString(),
+                canmodify: true,
+                candelete: true,
+                candownload: !isFolder,
+                ext: isFolder ? '' : (fileName.split('.').pop() || ''),
+                hash: file.path || '' // ハッシュとしてパスを使用
+            });
+        });
 
-            // ファイルを追加
-            const fileName = pathParts[pathParts.length - 1];
-            currentLevel[fileName] = {
-                type: 'file',
-                data: file
+        return entries;
+    }
+
+    // ファイルを開く処理
+    openFileInViewer(entry) {
+        console.log('ファイルを開く:', entry);
+
+        // js-fileexplorerのentryオブジェクトからパスと情報を取得
+        let filePath;
+        let fileInfo;
+        
+        if (typeof entry === 'string') {
+            filePath = entry;
+        } else if (entry && entry.id !== undefined) {
+            // 直接entryオブジェクトからプロパティを取得
+            filePath = entry.id;
+            fileInfo = entry;
+        } else {
+            console.error('ファイルパスを取得できません:', entry);
+            return;
+        }
+
+        // フォルダの場合は何もしない（FileExplorerが自動的にナビゲーションを処理）
+        if (fileInfo && fileInfo.type === 'folder') {
+            console.log('フォルダがクリックされました:', filePath);
+            return;
+        }
+
+        // ファイルの場合のみビューアーで開く
+        console.log('ファイルを開きます:', filePath);
+        this.loadFileContent(filePath);
+    }
+
+    // 新規ファイル作成ボタンの設定
+    setupNewFileButton() {
+        const newFileBtn = document.getElementById('newFileBtn');
+        if (newFileBtn) {
+            // 既存のイベントリスナーを削除してから新しいものを追加
+            newFileBtn.removeEventListener('click', this.handleNewFileClick);
+            this.handleNewFileClick = () => {
+                this.showNewFileDialog();
             };
-        });
-
-        return tree;
-    }
-
-    generateExplorerHTML(tree, level = 0) {
-        let html = '';
-
-        Object.keys(tree).sort().forEach(key => {
-            const item = tree[key];
-            const indent = level * 20;
-
-            if (item.type === 'folder') {
-                const hasChildren = Object.keys(item.children).length > 0;
-
-                html += `
-                    <details class="folder-details" data-folder="${key}">
-                        <summary class="folder-summary" style="padding-left: ${indent}px">
-                            <i class="fas fa-folder folder-icon"></i>
-                            <span class="folder-name">${key}</span>
-                        </summary>
-                        <div class="folder-content">
-                            ${hasChildren ? this.generateExplorerHTML(item.children, level + 1) : ''}
-                        </div>
-                    </details>
-                `;
-            } else {
-                const fileIcon = this.getFileIcon(key);
-                const fileSize = this.formatFileSize(item.data.size);
-
-                html += `
-                    <div class="file-item" data-path="${item.data.path}" style="padding-left: ${indent + 20}px">
-                        <i class="${fileIcon} file-icon"></i>
-                        <span class="file-name">${key}</span>
-                        <span class="file-size">(${fileSize})</span>
-                    </div>
-                `;
-            }
-        });
-
-        return html;
-    }
-
-    setupExplorerEvents() {
-        // 全てのdetails要素を確実に閉じた状態に設定
-        this.fileTree.querySelectorAll('details').forEach(details => {
-            details.removeAttribute('open');
-            details.open = false;
-        });
-
-        // ファイルクリック処理
-        this.fileTree.addEventListener('click', (e) => {
-            const fileItem = e.target.closest('.file-item');
-            if (fileItem) {
-                // 既存の選択をクリア
-                this.fileTree.querySelectorAll('.file-item.selected').forEach(item => {
-                    item.classList.remove('selected');
-                });
-
-                // 新しい選択を設定
-                fileItem.classList.add('selected');
-
-                // ファイルを読み込み
-                const filePath = fileItem.dataset.path;
-                this.loadFileContent(filePath);
-            }
-        });
-
-        // ファイルダブルクリック処理
-        this.fileTree.addEventListener('dblclick', (e) => {
-            const fileItem = e.target.closest('.file-item');
-            if (fileItem) {
-                const filePath = fileItem.dataset.path;
-                this.openPopoutEditor(filePath);
-            }
-        });
-
-        // フォルダの展開/折りたたみ処理
-        this.fileTree.addEventListener('toggle', (e) => {
-            if (e.target.classList.contains('folder-details')) {
-                const icon = e.target.querySelector('.folder-icon');
-                if (e.target.open) {
-                    // 展開時
-                    icon.className = 'fas fa-folder-open folder-icon';
-                    console.log(`フォルダ展開: ${e.target.dataset.folder}`);
-                } else {
-                    // 折りたたみ時
-                    icon.className = 'fas fa-folder folder-icon';
-                    console.log(`フォルダ折りたたみ: ${e.target.dataset.folder}`);
-                }
-            }
-        });
-
-        // 初期状態確認
-        const folderCount = this.fileTree.querySelectorAll('details').length;
-        const openCount = this.fileTree.querySelectorAll('details[open]').length;
-        console.log(`フォルダ総数: ${folderCount}, 開いているフォルダ: ${openCount}`);
-    }
-
-    getFileIcon(fileName) {
-        const extension = fileName.split('.').pop().toLowerCase();
-
-        switch (extension) {
-            case 'md':
-            case 'markdown':
-                return 'fab fa-markdown';
-            case 'txt':
-                return 'fas fa-file-alt';
-            case 'json':
-                return 'fas fa-file-code';
-            case 'py':
-                return 'fab fa-python';
-            case 'js':
-                return 'fab fa-js-square';
-            case 'pdf':
-                return 'fas fa-file-pdf';
-            case 'jpg':
-            case 'jpeg':
-            case 'png':
-            case 'gif':
-                return 'fas fa-file-image';
-            default:
-                return 'fas fa-file';
+            newFileBtn.addEventListener('click', this.handleNewFileClick);
         }
     }
 
+    // 新規ファイル作成ダイアログを表示
+    showNewFileDialog() {
+        const filename = prompt('新しいマークダウンファイル名を入力してください（拡張子不要）:');
+        if (filename && filename.trim()) {
+            this.createNewFile(filename.trim());
+        }
+    }
 
+    // 新規ファイルを作成
+    async createNewFile(filename) {
+        try {
+            // 現在のフォルダパスを取得
+            const currentPath = this.getCurrentFolderPath();
+            
+            const response = await fetch(`${this.baseUrl}/api/files/create`, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    filename: filename,
+                    folder_path: currentPath,
+                    content: `# ${filename}\n\n新しいマークダウンファイルです。\n\n`
+                })
+            });
 
-    showFileTreeError(message) {
-        this.fileTree.innerHTML = `<div class="file-tree-error">${message}</div>`;
+            const data = await response.json();
+
+            if (response.ok) {
+                // ファイルエクスプローラーを更新
+                this.refreshCurrentFolder();
+                // 作成したファイルを開く
+                this.loadFileContent(data.path);
+                console.log(`ファイル "${data.filename}" が作成されました`);
+            } else {
+                alert(`エラー: ${data.error}`);
+            }
+        } catch (error) {
+            console.error('ファイル作成エラー:', error);
+            alert('ファイル作成中にエラーが発生しました');
+        }
+    }
+
+    // 現在のフォルダパスを取得
+    getCurrentFolderPath() {
+        if (this.fileExplorer && this.fileExplorer.GetCurrentFolder) {
+            const folder = this.fileExplorer.GetCurrentFolder();
+            if (folder && folder.GetPathIDs) {
+                const pathIds = folder.GetPathIDs();
+                // 最初の空文字を除去し、残りを結合
+                return pathIds.length > 1 ? pathIds.slice(1).join('/') : '';
+            }
+        }
+        return '';
+    }
+
+    // 現在のフォルダを再読み込み
+    refreshCurrentFolder() {
+        if (this.fileExplorer && this.fileExplorer.GetCurrentFolder) {
+            const folder = this.fileExplorer.GetCurrentFolder();
+            if (folder && folder.Refresh) {
+                folder.Refresh();
+            }
+        }
     }
 
 
 
     async loadFileContent(filePath) {
-        if (!filePath) return;
+        console.log('loadFileContent 呼び出し:', filePath);
+        if (!filePath) {
+            console.log('ファイルパスが空です');
+            return;
+        }
 
         try {
             const response = await fetch(`${this.baseUrl}/api/files/${encodeURIComponent(filePath)}`);
@@ -818,12 +874,60 @@ class RAGInterface {
             if (defaultContent) {
                 defaultContent.style.display = 'none';
             }
-
-            // ファイル選択状態を更新
-            this.updateFileSelection(filePath);
         } catch (error) {
             console.error('ファイル読み込みエラー:', error);
             alert(`ファイル読み込みエラー: ${error.message}`);
+        }
+    }
+
+    async loadFileContentWithSectionHighlight(filePath, sectionText) {
+        if (!filePath) return;
+
+        try {
+            const response = await fetch(`${this.baseUrl}/api/files/${encodeURIComponent(filePath)}`);
+            const data = await response.json();
+
+            if (data.error) {
+                throw new Error(data.error);
+            }
+
+            this.currentDocumentPath = filePath;
+            this.documentTitle.textContent = `${this.getFileNameFromPath(filePath)} (${sectionText} をハイライト)`;
+
+            // セクションテキストをハイライトしてMarkdownを変換
+            const highlightedContent = this.highlightSectionInMarkdown(data.content, sectionText);
+            const htmlContent = this.convertMarkdownToHtml(highlightedContent);
+            this.documentContent.innerHTML = htmlContent;
+
+            this.documentViewer.style.display = 'block';
+
+            // デフォルトメッセージを非表示
+            const defaultContent = document.getElementById('defaultViewerContent');
+            if (defaultContent) {
+                defaultContent.style.display = 'none';
+            }
+
+            // ハイライト箇所にスクロール
+            setTimeout(() => {
+                const highlightedElement = this.documentContent.querySelector('.section-highlight');
+                if (highlightedElement) {
+                    highlightedElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // より目立つようにフォーカスを当てる
+                    highlightedElement.focus();
+                }
+            }, 300);
+
+        } catch (error) {
+            console.error('ファイル読み込みエラー:', error);
+            this.documentTitle.textContent = 'エラー';
+            this.documentContent.innerHTML = `<p>ファイルの読み込みに失敗しました: ${error.message}</p>`;
+            this.documentViewer.style.display = 'block';
+
+            // デフォルトメッセージを非表示
+            const defaultContent = document.getElementById('defaultViewerContent');
+            if (defaultContent) {
+                defaultContent.style.display = 'none';
+            }
         }
     }
 
@@ -854,16 +958,15 @@ class RAGInterface {
                 defaultContent.style.display = 'none';
             }
 
-            // ファイル選択状態を更新
-            this.updateFileSelection(filePath);
-
             // ハイライト箇所にスクロール
             setTimeout(() => {
                 const highlightedElement = this.documentContent.querySelector('.chunk-highlight');
                 if (highlightedElement) {
                     highlightedElement.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    // より目立つようにフォーカスを当てる
+                    highlightedElement.focus();
                 }
-            }, 100);
+            }, 300);
 
         } catch (error) {
             console.error('ファイル読み込みエラー:', error);
@@ -904,11 +1007,8 @@ class RAGInterface {
     }
 
     insertHighlightInOriginalText(fullContent, targetText) {
-        // より柔軟なマッチングのため、特殊文字をエスケープして正規表現を作成
-        const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
         // 空白の違いを許容する正規表現を作成
-        const flexiblePattern = escapeRegExp(targetText).replace(/\\\s+/g, '\\s+');
+        const flexiblePattern = this.escapeRegExp(targetText).replace(/\\\s+/g, '\\s+');
         const regex = new RegExp(`(${flexiblePattern})`, 'i');
 
         const match = fullContent.match(regex);
@@ -918,6 +1018,97 @@ class RAGInterface {
             const afterText = fullContent.substring(match.index + matchedText.length);
 
             return beforeText + `<span class="chunk-highlight">${matchedText}</span>` + afterText;
+        }
+
+        // より柔軟なマッチングを試す（複数の単語に分けて検索）
+        const words = targetText.trim().split(/\s+/).filter(word => word.length > 2);
+        if (words.length > 1) {
+            // 最初の数単語でマッチを試す
+            const partialText = words.slice(0, Math.min(3, words.length)).join(' ');
+            const partialPattern = this.escapeRegExp(partialText).replace(/\\\s+/g, '\\s+');
+            const partialRegex = new RegExp(`(${partialPattern})`, 'i');
+            
+            const partialMatch = fullContent.match(partialRegex);
+            if (partialMatch) {
+                const beforeText = fullContent.substring(0, partialMatch.index);
+                const matchedText = partialMatch[0];
+                const afterText = fullContent.substring(partialMatch.index + matchedText.length);
+
+                return beforeText + `<span class="chunk-highlight">${matchedText}</span>` + afterText;
+            }
+        }
+
+        return fullContent;
+    }
+
+    highlightSectionInMarkdown(fullContent, sectionText) {
+        console.log('highlightSectionInMarkdown 呼び出し');
+        console.log('検索対象セクション:', sectionText);
+        
+        // セクションテキストをクリーンアップ
+        const cleanSectionText = sectionText.trim();
+        
+        // マークダウンヘッダー形式のパターンを試す（より柔軟な検索）
+        const headerPatterns = [
+            new RegExp(`^(#{1,6})\\s*${this.escapeRegExp(cleanSectionText)}\\s*$`, 'im'),  // # Title形式
+            new RegExp(`^(#{1,6})\\s*${this.escapeRegExp(cleanSectionText)}`, 'im'),       // # Titleで始まる行
+            new RegExp(this.escapeRegExp(cleanSectionText), 'i')                          // 直接テキストマッチ
+        ];
+
+        for (const pattern of headerPatterns) {
+            const match = fullContent.match(pattern);
+            console.log(`パターン "${pattern}" のマッチ結果:`, match ? match[0] : 'なし');
+            
+            if (match) {
+                const beforeText = fullContent.substring(0, match.index);
+                const matchedText = match[0];
+                const afterText = fullContent.substring(match.index + matchedText.length);
+                
+                return beforeText + `<span class="section-highlight">${matchedText}</span>` + afterText;
+            }
+        }
+
+        // 部分的なキーワードマッチを試す
+        const keywords = cleanSectionText.split(' ').filter(word => word.length > 2);
+        if (keywords.length > 0) {
+            const keywordPattern = new RegExp(`(${keywords.map(this.escapeRegExp).join('|')})`, 'gi');
+            const keywordMatch = fullContent.match(keywordPattern);
+            console.log(`キーワードマッチ結果:`, keywordMatch);
+            
+            if (keywordMatch) {
+                // 最初のキーワードをハイライト
+                return fullContent.replace(keywordPattern, '<span class="section-highlight">$1</span>');
+            }
+        }
+
+        // マッチしない場合はそのまま返す
+        console.log('マッチするセクションが見つかりませんでした');
+        return fullContent;
+    }
+
+    escapeRegExp(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+
+    insertSectionHighlightInOriginalText(fullContent, targetText) {
+        console.log('insertSectionHighlightInOriginalText 呼び出し');
+        console.log('対象テキスト:', targetText);
+        
+        // 空白の違いを許容する正規表現を作成
+        const flexiblePattern = this.escapeRegExp(targetText).replace(/\\\s+/g, '\\s+');
+        const regex = new RegExp(`(${flexiblePattern})`, 'i');
+        
+        console.log('正規表現パターン:', flexiblePattern);
+
+        const match = fullContent.match(regex);
+        console.log('マッチ結果:', match ? match[0] : 'マッチなし');
+        
+        if (match) {
+            const beforeText = fullContent.substring(0, match.index);
+            const matchedText = match[0];
+            const afterText = fullContent.substring(match.index + matchedText.length);
+
+            return beforeText + `<span class="section-highlight">${matchedText}</span>` + afterText;
         }
 
         return fullContent;
@@ -935,19 +1126,7 @@ class RAGInterface {
         }
     }
 
-    updateFileSelection(selectedPath) {
-        const fileItems = this.fileTree.querySelectorAll('.file-item');
-        fileItems.forEach(item => item.classList.remove('selected'));
 
-        const selectedItem = Array.from(fileItems).find(item => {
-            const fileName = item.querySelector('.file-name').textContent;
-            return this.getFileNameFromPath(selectedPath) === fileName;
-        });
-
-        if (selectedItem) {
-            selectedItem.classList.add('selected');
-        }
-    }
 
     closeDocumentViewer() {
         this.documentViewer.style.display = 'none';
@@ -959,9 +1138,7 @@ class RAGInterface {
             defaultContent.style.display = 'block';
         }
 
-        // ファイル選択をクリア
-        const fileItems = this.fileTree.querySelectorAll('.file-item');
-        fileItems.forEach(item => item.classList.remove('selected'));
+
     }
 
     editCurrentDocument() {
@@ -1024,8 +1201,8 @@ class RAGInterface {
                 throw new Error(data.error);
             }
 
-            // ファイルツリーを更新
-            this.loadFileList();
+            // ファイルエクスプローラーを更新
+            this.refreshCurrentFolder();
 
             // ドキュメントビューアーが開いている場合は更新
             if (this.currentDocumentPath === filePath) {
@@ -1039,52 +1216,7 @@ class RAGInterface {
         }
     }
 
-    searchFiles(searchTerm) {
-        if (this.jsTreeInstance) {
-            this.jsTreeInstance.filterNodes(searchTerm, false);
-        }
-    }
 
-    createNewFile() {
-        const fileName = prompt('ファイル名を入力してください (例: memo.md):');
-        if (!fileName) return;
-
-        // .md拡張子を自動追加
-        const fullFileName = fileName.endsWith('.md') ? fileName : fileName + '.md';
-
-        // フォルダの指定があるかチェック
-        const filePath = fullFileName.includes('/') ? fullFileName : `data/${fullFileName}`;
-
-        // 新規ファイル用の別ウィンドウを開く
-        this.openPopoutEditor(null, filePath, `# ${fileName.replace('.md', '')}\n\n`);
-    }
-
-    createNewFolder() {
-        const folderName = prompt('フォルダ名を入力してください:');
-        if (!folderName) return;
-
-        const folderPath = `data/${folderName}`;
-        // TODO: バックエンドAPIでフォルダ作成機能を実装
-        alert('フォルダ作成機能は今後実装予定です');
-    }
-
-    createFileInFolder(folderPath) {
-        const fileName = prompt('ファイル名を入力してください (例: memo.md):');
-        if (!fileName) return;
-
-        const fullFileName = fileName.endsWith('.md') ? fileName : fileName + '.md';
-        const filePath = `${folderPath}/${fullFileName}`;
-
-        this.openPopoutEditor(null, filePath, `# ${fileName.replace('.md', '')}\n\n`);
-    }
-
-    createFolderInFolder(parentPath) {
-        const folderName = prompt('フォルダ名を入力してください:');
-        if (!folderName) return;
-
-        // TODO: バックエンドAPIでフォルダ作成機能を実装
-        alert('フォルダ作成機能は今後実装予定です');
-    }
 
     async deleteFile(filePath) {
         if (!confirm(`ファイル "${this.getFileNameFromPath(filePath)}" を削除しますか？`)) {
@@ -1102,7 +1234,7 @@ class RAGInterface {
             }
 
             alert('ファイルを削除しました');
-            this.loadFileList();
+            this.refreshCurrentFolder();
 
             // 削除されたファイルが現在開いているファイルの場合、ビューアーを閉じる
             if (this.currentDocumentPath === filePath) {
@@ -1118,11 +1250,11 @@ class RAGInterface {
         try {
             // TODO: バックエンドAPIでファイル/フォルダ名前変更機能を実装
             alert('名前変更機能は今後実装予定です');
-            this.loadFileList(); // 元に戻す
+            this.refreshCurrentFolder(); // 元に戻す
         } catch (error) {
             console.error('名前変更エラー:', error);
             alert(`名前変更エラー: ${error.message}`);
-            this.loadFileList(); // 元に戻す
+            this.refreshCurrentFolder(); // 元に戻す
         }
     }
 
@@ -1318,136 +1450,39 @@ class RAGInterface {
         popupWindow.focus();
     }
 
-    async createNewFile(parentPath = '') {
-        const fileName = prompt('新規ファイル名を入力してください:', 'new_file.md');
-        if (!fileName) return;
 
-        const fullPath = parentPath ? `${parentPath}/${fileName}` : fileName;
-
-        try {
-            const response = await fetch(`${this.baseUrl}/api/files/${encodeURIComponent(fullPath)}`, {
-                method: 'PUT',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    content: ''
-                })
-            });
-
-            if (response.ok) {
-                this.loadFiles();
-                this.openPopoutEditor(fullPath);
-            } else {
-                const error = await response.json();
-                alert(`ファイル作成エラー: ${error.error}`);
-            }
-        } catch (error) {
-            console.error('ファイル作成エラー:', error);
-            alert(`ファイル作成エラー: ${error.message}`);
-        }
-    }
-
-    async createNewFolder(parentPath = '') {
-        const folderName = prompt('新規フォルダ名を入力してください:', 'new_folder');
-        if (!folderName) return;
-
-        const fullPath = parentPath ? `${parentPath}/${folderName}` : folderName;
-
-        try {
-            const response = await fetch(`${this.baseUrl}/api/folders`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    path: fullPath
-                })
-            });
-
-            if (response.ok) {
-                this.loadFiles();
-            } else {
-                const error = await response.json();
-                alert(`フォルダ作成エラー: ${error.error}`);
-            }
-        } catch (error) {
-            console.error('フォルダ作成エラー:', error);
-            alert(`フォルダ作成エラー: ${error.message}`);
-        }
-    }
-
-    async renameItem(node) {
-        const currentPath = node.data.path;
-        const currentName = node.text.replace(/<[^>]*>/g, '').trim(); // HTMLタグを除去
-        const newName = prompt(`${node.type === 'folder' ? 'フォルダ' : 'ファイル'}の新しい名前を入力してください:`, currentName);
-
-        if (!newName || newName === currentName) return;
-
-        const pathParts = currentPath.split('/');
-        pathParts[pathParts.length - 1] = newName;
-        const newPath = pathParts.join('/');
-
-        try {
-            const response = await fetch(`${this.baseUrl}/api/files/${encodeURIComponent(currentPath)}/rename`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json',
-                },
-                body: JSON.stringify({
-                    new_name: newName
-                })
-            });
-
-            if (response.ok) {
-                this.loadFiles();
-            } else {
-                const error = await response.json();
-                alert(`リネームエラー: ${error.error}`);
-            }
-        } catch (error) {
-            console.error('リネームエラー:', error);
-            alert(`リネームエラー: ${error.message}`);
-        }
-    }
-
-    async deleteItem(node) {
-        const itemType = node.type === 'folder' ? 'フォルダ' : 'ファイル';
-        const nodeName = node.text.replace(/<[^>]*>/g, '').trim(); // HTMLタグを除去
-        const confirmMessage = `${itemType} "${nodeName}" を削除しますか？`;
-
-        if (!confirm(confirmMessage)) return;
-
-        try {
-            const response = await fetch(`${this.baseUrl}/api/files/${encodeURIComponent(node.data.path)}`, {
-                method: 'DELETE'
-            });
-
-            if (response.ok) {
-                this.loadFiles();
-
-                // もしビューアーで表示中だった場合は閉じる
-                if (node.type !== 'folder' && this.documentViewer.style.display === 'block') {
-                    const currentPath = document.getElementById('documentTitle').textContent;
-                    if (currentPath === node.data.path) {
-                        this.closeDocument();
-                    }
-                }
-            } else {
-                const error = await response.json();
-                alert(`削除エラー: ${error.error}`);
-            }
-        } catch (error) {
-            console.error('削除エラー:', error);
-            alert(`削除エラー: ${error.message}`);
-        }
-    }
 
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+// 1回だけ初期化されるように管理
+let ragInterfaceInitialized = false;
+
+function initializeRAGInterface() {
+    if (ragInterfaceInitialized) {
+        console.log('RAGInterface は既に初期化済みです');
+        return;
+    }
+    
+    console.log('RAGInterface を初期化します');
     const ragInterface = new RAGInterface();
     ragInterface.initialize();
-
     window.ragInterface = ragInterface;
+    ragInterfaceInitialized = true;
+}
+
+// すべてのリソース（画像、CSS、JSファイル）が読み込まれた後に初期化
+window.addEventListener('load', () => {
+    console.log('window.load イベント発火');
+    console.log('FileExplorer利用可能:', !!window.FileExplorer);
+    initializeRAGInterface();
+});
+
+// DOMContentLoadedでも試す（window.loadより早く発火する場合がある）
+document.addEventListener('DOMContentLoaded', () => {
+    console.log('DOMContentLoaded イベント発火');
+    console.log('FileExplorer利用可能:', !!window.FileExplorer);
+    
+    if (window.FileExplorer) {
+        initializeRAGInterface();
+    }
 });

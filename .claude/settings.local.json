@@ -9,7 +9,8 @@
       "Bash(pkill:*)",
       "Bash(taskkill:*)",
       "Bash(ls:*)",
-      "Bash(wc:*)"
+      "Bash(wc:*)",
+      "Bash(tail:*)"
     ],
     "deny": []
   }

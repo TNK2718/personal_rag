@@ -523,7 +523,7 @@ class RAGSystem:
                     f"[DEBUG] Found {len(sections)} sections in {relative_path}")
 
                 for i, section in enumerate(sections):
-                    section_name = f"{section.header} (Level {section.level})"
+                    section_name = section.header
 
                     # TODOセクションの場合、デバッグ情報を出力
                     if 'TODO' in section.header.upper():

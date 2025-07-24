@@ -341,6 +341,155 @@ def get_overdue_todos():
         logger.error(f"期限切れTODO取得中にエラーが発生しました: {e}")
         return jsonify({'error': f'期限切れTODO取得に失敗しました: {str(e)}'}), 500
 
+
+@app.route('/api/browse', methods=['GET'])
+@app.route('/api/browse/<path:folder_path>', methods=['GET'])
+def browse_folder(folder_path=''):
+    """フォルダ・ファイル一覧を取得するエンドポイント（フォルダナビゲーション用）"""
+    try:
+        # データディレクトリのパスを決定
+        data_dir = None
+        possible_paths = [
+            os.path.join(current_dir, 'data'),  # テスト環境用
+            os.path.join(current_dir, '..', '..', 'data'),  # 通常実行用
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                data_dir = path
+                break
+        if data_dir is None:
+            # dataディレクトリが存在しない場合は最初のパスを使用して作成
+            data_dir = possible_paths[0]
+            os.makedirs(data_dir, exist_ok=True)
+
+        # 指定されたフォルダパスを結合
+        target_dir = os.path.join(
+            data_dir, folder_path) if folder_path else data_dir
+
+        # セキュリティチェック：target_dirがdata_dir以下にあることを確認
+        target_dir = os.path.normpath(target_dir)
+        data_dir = os.path.normpath(data_dir)
+        if not target_dir.startswith(data_dir):
+            return jsonify({'error': '無効なパスです'}), 400
+
+        items = []
+        if os.path.exists(target_dir):
+            try:
+                for item_name in os.listdir(target_dir):
+                    item_path = os.path.join(target_dir, item_name)
+
+                    # 隠しファイル・フォルダをスキップ
+                    if item_name.startswith('.'):
+                        continue
+
+                    # 相対パス（folder_pathからの）
+                    rel_item_path = os.path.join(
+                        folder_path, item_name) if folder_path else item_name
+                    rel_item_path = rel_item_path.replace('\\', '/')
+
+                    stat = os.stat(item_path)
+
+                    if os.path.isdir(item_path):
+                        # フォルダ
+                        items.append({
+                            'path': rel_item_path,
+                            'name': item_name,
+                            'type': 'folder',
+                            'size': 0,
+                            'modified': int(stat.st_mtime)
+                        })
+                    elif item_name.endswith('.md'):
+                        # Markdownファイル
+                        items.append({
+                            'path': rel_item_path,
+                            'name': item_name,
+                            'type': 'file',
+                            'size': stat.st_size,
+                            'modified': int(stat.st_mtime)
+                        })
+            except PermissionError:
+                return jsonify({'error': 'フォルダにアクセスできません'}), 403
+
+        return jsonify({'files': items})
+    except Exception as e:
+        logger.error(f"フォルダブラウジング中にエラーが発生しました: {e}")
+        return jsonify({'error': f'フォルダブラウジングに失敗しました: {str(e)}'}), 500
+
+
+@app.route('/api/files/create', methods=['POST'])
+def create_new_file():
+    """新しいマークダウンファイルを作成するエンドポイント"""
+    try:
+        data = request.get_json()
+        if not data or 'filename' not in data:
+            return jsonify({'error': 'ファイル名が指定されていません'}), 400
+
+        filename = data['filename']
+        folder_path = data.get('folder_path', '')  # 作成先フォルダパス
+        content = data.get(
+            'content', f'# {filename.replace(".md", "")}\n\n')  # 初期内容
+
+        # ファイル名の検証
+        if not filename.endswith('.md'):
+            filename += '.md'
+
+        # 不正な文字をチェック
+        if any(char in filename for char in ['/', '\\', ':', '*', '?', '"', '<', '>', '|']):
+            return jsonify({'error': '無効な文字がファイル名に含まれています'}), 400
+
+        # データディレクトリのパスを決定
+        data_dir = None
+        possible_paths = [
+            os.path.join(current_dir, 'data'),  # テスト環境用
+            os.path.join(current_dir, '..', '..', 'data'),  # 通常実行用
+        ]
+        for path in possible_paths:
+            if os.path.exists(path):
+                data_dir = path
+                break
+        if data_dir is None:
+            # dataディレクトリが存在しない場合は最初のパスを使用して作成
+            data_dir = possible_paths[0]
+            os.makedirs(data_dir, exist_ok=True)
+
+        # ファイルパスを構築
+        if folder_path:
+            target_dir = os.path.join(data_dir, folder_path)
+            # セキュリティチェック
+            target_dir = os.path.normpath(target_dir)
+            data_dir = os.path.normpath(data_dir)
+            if not target_dir.startswith(data_dir):
+                return jsonify({'error': '無効なフォルダパスです'}), 400
+        else:
+            target_dir = data_dir
+
+        # ディレクトリが存在しない場合は作成
+        os.makedirs(target_dir, exist_ok=True)
+
+        full_path = os.path.join(target_dir, filename)
+
+        # ファイルが既に存在するかチェック
+        if os.path.exists(full_path):
+            return jsonify({'error': 'ファイルが既に存在します'}), 409
+
+        # ファイルを作成
+        with open(full_path, 'w', encoding='utf-8') as f:
+            f.write(content)
+
+        # 相対パスを計算
+        rel_path = os.path.relpath(full_path, data_dir).replace('\\', '/')
+
+        return jsonify({
+            'message': 'ファイルが作成されました',
+            'filename': filename,
+            'path': rel_path
+        }), 201
+
+    except Exception as e:
+        logger.error(f"ファイル作成中にエラーが発生しました: {e}")
+        return jsonify({'error': f'ファイル作成に失敗しました: {str(e)}'}), 500
+
+
 # 静的ファイルを提供するエンドポイント
 
 
