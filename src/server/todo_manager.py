@@ -105,13 +105,28 @@ class TodoManager:
                     source_key = f"{source_file}:{source_section}:{content}"
                     todo_id = hashlib.md5(source_key.encode()).hexdigest()[:8]
 
+                    # 既存のTODOを確認して作成日を保持
+                    existing_todo = None
+                    for existing in self.todos:
+                        if existing.id == todo_id:
+                            existing_todo = existing
+                            break
+                    
+                    # 作成日と更新日を決定
+                    if existing_todo:
+                        created_at = existing_todo.created_at
+                        updated_at = current_time
+                    else:
+                        created_at = current_time
+                        updated_at = current_time
+
                     todo = TodoItem(
                         id=todo_id,
                         content=content,
                         status="pending",
                         priority=priority,
-                        created_at=current_time,
-                        updated_at=current_time,
+                        created_at=created_at,
+                        updated_at=updated_at,
                         source_file=source_file,
                         source_section=source_section
                     )
@@ -300,16 +315,76 @@ class TodoManager:
         """
         added_count = 0
         existing_ids = {todo.id for todo in self.todos}
+        
+        # 内容ベースの重複チェック用に正規化された内容をセットで保持
+        existing_normalized_contents = set()
+        for existing_todo in self.todos:
+            normalized = self._normalize_content_for_dedup(existing_todo.content)
+            existing_normalized_contents.add(normalized)
 
         for todo in extracted_todos:
-            if todo.id not in existing_ids:
-                self.todos.append(todo)
-                added_count += 1
+            # IDベースのチェック
+            if todo.id in existing_ids:
+                continue
+                
+            # 内容ベースのチェック
+            normalized_content = self._normalize_content_for_dedup(todo.content)
+            if normalized_content in existing_normalized_contents:
+                continue
+                
+            # 重複していない場合は追加
+            self.todos.append(todo)
+            existing_ids.add(todo.id)
+            existing_normalized_contents.add(normalized_content)
+            added_count += 1
 
         if added_count > 0:
             self._save_todos()
 
         return added_count
+    
+    def _normalize_content_for_dedup(self, content: str) -> str:
+        """
+        重複チェック用にTODO内容を正規化する
+        
+        Args:
+            content: TODO内容
+            
+        Returns:
+            正規化されたTODO内容
+        """
+        import re
+        
+        # 基本的な前処理
+        normalized = content.strip()
+        
+        # 各種プレフィックスを段階的に除去（複数回適用で複合パターンに対応）
+        prefixes_to_remove = [
+            r'^[\*\-\+]\s*\[\s*[x ]?\s*\]\s*',  # リスト付きマークダウンチェックボックス: - [ ], * [x], + []
+            r'^-\s*\[\s*[x ]?\s*\]\s*',         # マークダウンチェックボックス: - [ ], - [x]
+            r'^\[\s*[x ]?\s*\]\s*',             # 単体チェックボックス: [ ], [x]
+            r'^[\*\-\+]\s*',                    # リストマーカー: -, *, +
+            r'^\d+\.\s*',                       # 番号付きリスト: 1., 2.
+            r'(?i)^(TODO|FIXME|BUG|HACK|NOTE|XXX)\s*:?\s*',  # TODOプレフィックス
+        ]
+        
+        # 正規表現を使って順次プレフィックスを除去（複数回実行で複合パターンに対応）
+        for _ in range(2):  # 最大2回実行で複合パターンを処理
+            for pattern in prefixes_to_remove:
+                before = normalized
+                normalized = re.sub(pattern, '', normalized).strip()
+                if before != normalized:
+                    break  # パターンが適用されたら次のループへ
+        
+        # 句読点を除去
+        punctuation_pattern = r'[。、！？．，!?\.;:…]+$'
+        normalized = re.sub(punctuation_pattern, '', normalized)
+        
+        # 空白文字を統一
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        normalized = normalized.replace('　', ' ')
+        
+        return normalized.lower().strip()
 
     def _extract_due_date_from_text(self, text: str) -> Optional[str]:
         """

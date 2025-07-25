@@ -533,33 +533,28 @@ class RAGSystem:
                         print(
                             f"[DEBUG] Section content preview: {section.content[:50]}...")
 
-                    # チャンクからTODOメタデータを抽出（メインの抽出方法）
+                    # チャンクからTODOメタデータを抽出
                     chunk_todos = self._extract_todos_from_chunks(
-                        section.content, relative_path, section_name, i
+                        section.content, relative_path, section_name, i, section.header
                     )
 
-                    # チャンクで抽出されなかったTODOをテキスト抽出で補完
+                    # テキストからTODOを抽出
                     text_todos = self.todo_manager.extract_todos_from_text(
                         section.content,
                         relative_path,
                         section_name
                     )
 
-                    # チャンクTODOが抽出された場合はそちらを優先、そうでなければテキストTODOを使用
-                    if chunk_todos:
+                    # 重複を除去して両方の抽出結果をマージ
+                    section_todos = self._deduplicate_todos(chunk_todos, text_todos)
+                    
+                    if section_todos:
                         print(
-                            f"[DEBUG] Found {len(chunk_todos)} TODOs from chunk metadata in section '{section.header}'")
-                        for todo in chunk_todos:
-                            print(f"[DEBUG] Chunk TODO: {todo.content}")
-                        all_extracted_todos.extend(chunk_todos)
-                        total_extracted += len(chunk_todos)
-                    elif text_todos:
-                        print(
-                            f"[DEBUG] Found {len(text_todos)} TODOs from text extraction in section '{section.header}'")
-                        for todo in text_todos:
-                            print(f"[DEBUG] Text TODO: {todo.content}")
-                        all_extracted_todos.extend(text_todos)
-                        total_extracted += len(text_todos)
+                            f"[DEBUG] Found {len(section_todos)} unique TODOs in section '{section.header}' (chunk: {len(chunk_todos)}, text: {len(text_todos)})")
+                        for todo in section_todos:
+                            print(f"[DEBUG] Unique TODO: {todo.content}")
+                        all_extracted_todos.extend(section_todos)
+                        total_extracted += len(section_todos)
 
             except Exception as e:
                 print(f"[DEBUG] Error extracting TODOs from {file_path}: {e}")
@@ -579,7 +574,7 @@ class RAGSystem:
         print(f"[DEBUG] No TODOs extracted")
         return 0
 
-    def _extract_todos_from_chunks(self, text: str, relative_path: str, section_name: str, section_id: int) -> List[TodoItem]:
+    def _extract_todos_from_chunks(self, text: str, relative_path: str, section_name: str, section_id: int, section_header: str = "") -> List[TodoItem]:
         """
         チャンクのメタデータからTODOを抽出する
 
@@ -588,15 +583,16 @@ class RAGSystem:
             relative_path: 相対ファイルパス
             section_name: セクション名
             section_id: セクションID
+            section_header: セクションのヘッダー名
 
         Returns:
             抽出されたTODO項目のリスト
         """
         todos = []
 
-        # チャンクのメタデータを作成
+        # チャンクのメタデータを作成（セクションヘッダーを含める）
         chunks_with_metadata = self.text_chunker.create_chunks_with_todo_metadata(
-            text, relative_path, section_id
+            text, relative_path, section_id, section_header
         )
 
         for chunk_data in chunks_with_metadata:
@@ -613,6 +609,21 @@ class RAGSystem:
                         f"{relative_path}:{section_name}:{todo_content}".encode()
                     ).hexdigest()[:8]
 
+                    # 既存のTODOを確認して作成日を保持
+                    existing_todo = None
+                    for existing in self.todo_manager.todos:
+                        if existing.id == todo_id:
+                            existing_todo = existing
+                            break
+                    
+                    # 作成日と更新日を決定
+                    if existing_todo:
+                        created_at = existing_todo.created_at
+                        updated_at = current_time
+                    else:
+                        created_at = current_time
+                        updated_at = current_time
+
                     # TODOコンテンツから締切日を抽出
                     extracted_due_date = self.todo_manager._extract_due_date_from_text(
                         todo_content)
@@ -622,8 +633,8 @@ class RAGSystem:
                         content=todo_content,
                         status="pending",
                         priority=metadata.get('todo_priority', 'medium'),
-                        created_at=current_time,
-                        updated_at=current_time,
+                        created_at=created_at,
+                        updated_at=updated_at,
                         source_file=relative_path,
                         source_section=section_name,
                         due_date=extracted_due_date,
@@ -632,6 +643,131 @@ class RAGSystem:
                     todos.append(todo)
 
         return todos
+
+    def _deduplicate_todos(self, chunk_todos: List[TodoItem], text_todos: List[TodoItem]) -> List[TodoItem]:
+        """
+        チャンクTODOとテキストTODOから重複を除去してマージする
+        
+        Args:
+            chunk_todos: チャンクから抽出されたTODO項目のリスト
+            text_todos: テキストから抽出されたTODO項目のリスト
+            
+        Returns:
+            重複を除去したTODO項目のリスト
+        """
+        # チャンクTODOを優先とする統合リスト
+        unique_todos = []
+        seen_contents = set()
+        
+        # チャンクTODOを最初に追加（より詳細なメタデータを持つため優先）
+        content_to_todo = {}  # 正規化コンテンツ -> TODO のマッピング
+        
+        for todo in chunk_todos:
+            normalized_content = self._normalize_todo_content(todo.content)
+            if len(normalized_content) > 3:
+                if normalized_content not in content_to_todo:
+                    content_to_todo[normalized_content] = todo
+                    seen_contents.add(normalized_content)
+                else:
+                    # 既存のTODOと比較して、より早い作成日を保持
+                    existing_todo = content_to_todo[normalized_content]
+                    if todo.created_at < existing_todo.created_at:
+                        # より早い作成日のTODOで置き換え（ただしチャンクメタデータは保持）
+                        updated_todo = TodoItem(
+                            id=existing_todo.id,
+                            content=existing_todo.content,
+                            status=existing_todo.status,
+                            priority=existing_todo.priority,
+                            created_at=todo.created_at,  # より早い作成日を使用
+                            updated_at=existing_todo.updated_at,
+                            source_file=existing_todo.source_file,
+                            source_section=existing_todo.source_section,
+                            due_date=existing_todo.due_date,
+                            tags=existing_todo.tags,
+                            related_chunk_ids=existing_todo.related_chunk_ids
+                        )
+                        content_to_todo[normalized_content] = updated_todo
+        
+        # テキストTODOから重複していないものを追加、または作成日がより早いものは更新
+        for todo in text_todos:
+            normalized_content = self._normalize_todo_content(todo.content)
+            if len(normalized_content) > 3:
+                if normalized_content not in content_to_todo:
+                    content_to_todo[normalized_content] = todo
+                    seen_contents.add(normalized_content)
+                else:
+                    # 既存のTODOと比較して、より早い作成日を保持
+                    existing_todo = content_to_todo[normalized_content]
+                    if todo.created_at < existing_todo.created_at:
+                        # より早い作成日で既存TODOを更新（チャンクメタデータは保持）
+                        updated_todo = TodoItem(
+                            id=existing_todo.id,
+                            content=existing_todo.content,
+                            status=existing_todo.status,
+                            priority=existing_todo.priority,
+                            created_at=todo.created_at,  # より早い作成日を使用
+                            updated_at=existing_todo.updated_at,
+                            source_file=existing_todo.source_file,
+                            source_section=existing_todo.source_section,
+                            due_date=existing_todo.due_date,
+                            tags=existing_todo.tags,
+                            related_chunk_ids=existing_todo.related_chunk_ids
+                        )
+                        content_to_todo[normalized_content] = updated_todo
+        
+        # マップから最終的なリストを作成
+        unique_todos = list(content_to_todo.values())
+        
+        return unique_todos
+    
+    def _normalize_todo_content(self, content: str) -> str:
+        """
+        TODO内容を正規化して重複判定用に統一する
+        
+        Args:
+            content: TODO内容
+            
+        Returns:
+            正規化されたTODO内容
+        """
+        import re
+        
+        # 基本的な前処理
+        normalized = content.strip()
+        
+        # 各種プレフィックスを段階的に除去（複数回適用で複合パターンに対応）
+        prefixes_to_remove = [
+            r'^[\*\-\+]\s*\[\s*[x ]?\s*\]\s*',  # リスト付きマークダウンチェックボックス: - [ ], * [x], + []
+            r'^-\s*\[\s*[x ]?\s*\]\s*',         # マークダウンチェックボックス: - [ ], - [x]
+            r'^\[\s*[x ]?\s*\]\s*',             # 単体チェックボックス: [ ], [x]
+            r'^[\*\-\+]\s*',                    # リストマーカー: -, *, +
+            r'^\d+\.\s*',                       # 番号付きリスト: 1., 2.
+            r'(?i)^(TODO|FIXME|BUG|HACK|NOTE|XXX)\s*:?\s*',  # TODOプレフィックス
+        ]
+        
+        # 正規表現を使って順次プレフィックスを除去（複数回実行で複合パターンに対応）
+        for _ in range(2):  # 最大2回実行で複合パターンを処理
+            for pattern in prefixes_to_remove:
+                before = normalized
+                normalized = re.sub(pattern, '', normalized).strip()
+                if before != normalized:
+                    break  # パターンが適用されたら次のループへ
+        
+        # 句読点を統一・除去（日本語と英語の句読点）
+        punctuation_pattern = r'[。、！？．，!?\.;:…]+$'
+        normalized = re.sub(punctuation_pattern, '', normalized)
+        
+        # 複数のスペース・タブを単一スペースに統一
+        normalized = re.sub(r'\s+', ' ', normalized).strip()
+        
+        # 全角スペースを半角スペースに統一
+        normalized = normalized.replace('　', ' ')
+        
+        # 「する」「を行う」などの冗長な表現を正規化（オプション）
+        # これは積極的すぎる可能性があるので、コメントアウト
+        # normalized = re.sub(r'(する|を行う|を実行する)$', '', normalized)
+        
+        return normalized.lower().strip()
 
     def _chunk_has_todo(self, chunk_text: str) -> bool:
         """

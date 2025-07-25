@@ -310,7 +310,7 @@ class TextChunker:
         
         return chunks
 
-    def create_chunks_with_todo_metadata(self, text: str, file_path: str, section_id: int) -> List[Dict[str, Any]]:
+    def create_chunks_with_todo_metadata(self, text: str, file_path: str, section_id: int, section_header: str = "") -> List[Dict[str, Any]]:
         """
         TODOメタデータ付きのチャンクを作成する
         
@@ -318,6 +318,7 @@ class TextChunker:
             text: 分割するテキスト
             file_path: ファイルパス
             section_id: セクションID
+            section_header: セクションのヘッダー名
             
         Returns:
             メタデータ付きチャンクのリスト
@@ -347,6 +348,9 @@ class TextChunker:
             (r'^\s*[\*\-]\s*(?:XXX|xxx)\s*:?\s*(.+?)(?=\n|$)', 'XXX')
         ]
         
+        # セクションヘッダーにTODO関連キーワードが含まれているかチェック
+        header_has_todo = self._check_header_has_todo(section_header)
+        
         for i, chunk_text in enumerate(chunks):
             chunk_id = f"{file_path}:section_{section_id}:chunk_{i}"
             
@@ -356,23 +360,43 @@ class TextChunker:
             todo_content = None
             todo_priority = 'medium'
             
-            for pattern, pattern_type in todo_patterns:
-                match = re.search(pattern, chunk_text, re.MULTILINE | re.IGNORECASE)
-                if match:
-                    has_todo = True
-                    todo_type = pattern_type
-                    todo_content = match.group(1).strip()
-                    
-                    # 優先度の推定
-                    urgent_words = ['urgent', '急', '緊急', 'asap']
-                    later_words = ['later', '後で', '将来']
-                    
-                    if any(word in chunk_text.lower() for word in urgent_words):
-                        todo_priority = 'high'
-                    elif any(word in chunk_text.lower() for word in later_words):
-                        todo_priority = 'low'
-                    
-                    break
+            # セクションヘッダーにTODOが含まれている場合、全チャンクをTODO項目として扱う
+            if header_has_todo:
+                has_todo = True
+                todo_type = 'TODO'
+                # チャンクの内容全体をTODOコンテンツとして使用
+                todo_content = chunk_text.strip()
+                # ヘッダーから抽出したTODOタイプを使用
+                if 'FIXME' in section_header.upper():
+                    todo_type = 'FIXME'
+                elif 'BUG' in section_header.upper():
+                    todo_type = 'BUG'
+                elif 'HACK' in section_header.upper():
+                    todo_type = 'HACK'
+                elif 'NOTE' in section_header.upper():
+                    todo_type = 'NOTE'
+                elif 'XXX' in section_header.upper():
+                    todo_type = 'XXX'
+            else:
+                # 通常のチャンク内TODOパターン検出
+                for pattern, pattern_type in todo_patterns:
+                    match = re.search(pattern, chunk_text, re.MULTILINE | re.IGNORECASE)
+                    if match:
+                        has_todo = True
+                        todo_type = pattern_type
+                        todo_content = match.group(1).strip()
+                        break
+            
+            # 優先度の推定（共通処理）
+            if has_todo:
+                urgent_words = ['urgent', '急', '緊急', 'asap']
+                later_words = ['later', '後で', '将来']
+                
+                check_text = section_header + " " + chunk_text
+                if any(word in check_text.lower() for word in urgent_words):
+                    todo_priority = 'high'
+                elif any(word in check_text.lower() for word in later_words):
+                    todo_priority = 'low'
             
             # コンテキストキーワードの抽出
             context_keywords = []
@@ -399,6 +423,24 @@ class TextChunker:
             })
         
         return chunks_with_metadata
+
+    def _check_header_has_todo(self, header: str) -> bool:
+        """
+        セクションヘッダーにTODO関連キーワードが含まれているかチェック
+        
+        Args:
+            header: セクションヘッダー
+            
+        Returns:
+            TODO関連キーワードが含まれている場合True
+        """
+        if not header:
+            return False
+            
+        header_upper = header.upper()
+        todo_keywords = ['TODO', 'FIXME', 'BUG', 'HACK', 'NOTE', 'XXX']
+        
+        return any(keyword in header_upper for keyword in todo_keywords)
 
     def get_chunk_metadata(self, chunks: List[str]) -> dict:
         """
