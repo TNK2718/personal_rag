@@ -417,11 +417,38 @@ class RAGInterface {
             this.todos.filter(todo => todo.status === statusFilter) :
             this.todos;
 
-        // 新しい順（updated_atの降順）でソート
+        // カスタムソート: 完了項目は下に、未完了は重要度と期限順
         filteredTodos.sort((a, b) => {
-            const dateA = new Date(a.updated_at || a.created_at);
-            const dateB = new Date(b.updated_at || b.created_at);
-            return dateB - dateA; // 降順
+            // 完了状態でまず分ける（未完了が上、完了が下）
+            if (a.status !== b.status) {
+                if (a.status === 'completed') return 1;
+                if (b.status === 'completed') return -1;
+            }
+            
+            // 両方が未完了の場合：重要度順（高→中→低）、その後期限順
+            if (a.status === 'pending' && b.status === 'pending') {
+                // 重要度の優先度マップ
+                const priorityOrder = { 'high': 3, 'medium': 2, 'low': 1 };
+                const priorityDiff = (priorityOrder[b.priority] || 2) - (priorityOrder[a.priority] || 2);
+                
+                if (priorityDiff !== 0) {
+                    return priorityDiff;
+                }
+                
+                // 重要度が同じ場合は期限順（期限が近い順）
+                const dateA = a.due_date ? new Date(a.due_date) : new Date('9999-12-31');
+                const dateB = b.due_date ? new Date(b.due_date) : new Date('9999-12-31');
+                return dateA - dateB; // 昇順（早い期限が上）
+            }
+            
+            // 両方が完了の場合：更新日時の降順
+            if (a.status === 'completed' && b.status === 'completed') {
+                const dateA = new Date(a.updated_at || a.created_at);
+                const dateB = new Date(b.updated_at || b.created_at);
+                return dateB - dateA; // 降順
+            }
+            
+            return 0;
         });
 
         if (filteredTodos.length === 0) {

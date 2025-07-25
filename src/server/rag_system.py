@@ -537,14 +537,14 @@ class RAGSystem:
                     chunk_todos = self._extract_todos_from_chunks(
                         section.content, relative_path, section_name, i
                     )
-                    
+
                     # チャンクで抽出されなかったTODOをテキスト抽出で補完
                     text_todos = self.todo_manager.extract_todos_from_text(
                         section.content,
                         relative_path,
                         section_name
                     )
-                    
+
                     # チャンクTODOが抽出された場合はそちらを優先、そうでなければテキストTODOを使用
                     if chunk_todos:
                         print(
@@ -614,7 +614,8 @@ class RAGSystem:
                     ).hexdigest()[:8]
 
                     # TODOコンテンツから締切日を抽出
-                    extracted_due_date = self.todo_manager._extract_due_date_from_text(todo_content)
+                    extracted_due_date = self.todo_manager._extract_due_date_from_text(
+                        todo_content)
 
                     todo = TodoItem(
                         id=todo_id,
@@ -727,7 +728,6 @@ class RAGSystem:
                 'total_todos': len(all_todos),
                 'pending_todos': len([t for t in all_todos if t.status == 'pending']),
                 'completed_todos': len([t for t in all_todos if t.status == 'completed']),
-                'in_progress_todos': len([t for t in all_todos if t.status == 'in_progress'])
             }
 
             # ドキュメント統計情報
