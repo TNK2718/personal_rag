@@ -179,11 +179,29 @@ class TestUIFeatures:
 
     def test_todo_management_ui_endpoints(self, client):
         """TODO管理UI用エンドポイント"""
-        with patch('src.server.server.rag_system', Mock()) as mock_rag:
-            mock_rag.get_todos.return_value = []
+        with patch('src.server.server.rag_system') as mock_rag:
+            # TodoItemのモックオブジェクトを作成
+            from src.server.todo_manager import TodoItem
+            from datetime import datetime
+            
+            mock_todo = TodoItem(
+                id="test1",
+                content="テストタスク",
+                status="pending",
+                priority="medium",
+                created_at=datetime.now().isoformat(),
+                updated_at=datetime.now().isoformat(),
+                source_file="test.md",
+                source_section="セクション"
+            )
+            
+            mock_rag.get_todos.return_value = [mock_todo]
 
             response = client.get('/api/todos')
             assert response.status_code == 200
+            data = response.get_json()
+            assert 'todos' in data
+            assert data['count'] == 1
 
             response = client.get('/api/todos?status=pending')
             assert response.status_code == 200

@@ -108,11 +108,13 @@ class TestAPIServer:
     def test_get_todos_endpoint(self, client, mock_rag_instance, sample_todo_items):
         """TODO取得エンドポイントのテスト"""
         # RAGシステムのget_todosメソッドをモック
-        from unittest.mock import Mock
-        mock_get_todos = Mock(return_value=sample_todo_items)
-        mock_rag_instance.get_todos = mock_get_todos
+        mock_rag_instance.get_todos.return_value = sample_todo_items
+        # todo_managerのtodo_file_pathを文字列としてモック
+        mock_rag_instance.todo_manager.todo_file_path = "/tmp/test_todos.json"
 
-        with patch('src.server.server.rag_system', mock_rag_instance):
+        with patch('src.server.server.rag_system', mock_rag_instance), \
+                patch('os.path.exists', return_value=True), \
+                patch('os.path.getsize', return_value=100):
             response = client.get('/api/todos')
 
             assert response.status_code == 200
@@ -126,11 +128,13 @@ class TestAPIServer:
         # pendingステータスのTODOのみ返すようにモック
         pending_todos = [
             todo for todo in sample_todo_items if todo.status == 'pending']
-        from unittest.mock import Mock
-        mock_get_todos = Mock(return_value=pending_todos)
-        mock_rag_instance.get_todos = mock_get_todos
+        mock_rag_instance.get_todos.return_value = pending_todos
+        # todo_managerのtodo_file_pathを文字列としてモック
+        mock_rag_instance.todo_manager.todo_file_path = "/tmp/test_todos.json"
 
-        with patch('src.server.server.rag_system', mock_rag_instance):
+        with patch('src.server.server.rag_system', mock_rag_instance), \
+                patch('os.path.exists', return_value=True), \
+                patch('os.path.getsize', return_value=100):
             response = client.get('/api/todos?status=pending')
 
             assert response.status_code == 200
