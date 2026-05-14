@@ -1,18 +1,22 @@
 [project]
 name = "personal-rag"
-version = "0.1.0"
-description = "Add your description here"
+version = "0.2.0"
+description = "Local agentic document search over a SQLite-backed corpus (sqlite-vec + FTS5 + tool-calling LLM)."
 readme = "README.md"
 requires-python = ">=3.10"
 dependencies = [
-    "faiss-cpu>=1.11.0",
+    "flask>=3.0",
     "flask-cors>=6.0.1",
-    "llama-index>=0.12.45",
-    "llama-index-embeddings-ollama>=0.6.0",
-    "llama-index-llms-ollama>=0.6.2",
-    "llama-index-vector-stores-faiss>=0.4.0",
-    "markdown-it-py>=3.0.0",
     "ollama>=0.5.1",
+    "openai>=1.50",
+    "instructor>=1.6",
+    "pydantic>=2.8",
+    "pydantic-settings>=2.4",
+    "sqlite-vec>=0.1.6",
+    "sqlglot>=25.0",
+    "apscheduler>=3.10",
+    "python-dateutil>=2.9",
+    "click>=8.1",
 ]
 
 [project.optional-dependencies]
@@ -22,14 +26,24 @@ test = [
     "pytest-cov>=4.0.0",
     "requests>=2.25.0",
 ]
+ingestion = [
+    "docling>=2.0",
+    "trafilatura>=1.12",
+    "markdown-it-py>=3.0.0",
+]
 
 [project.scripts]
-# 基本的なテストのエントリーポイント
-test = "pytest"
+docdb = "docdb.cli:main"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py", "*_test.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
-addopts = "--verbose --cov=src --cov-report=html --cov-report=term"
+markers = [
+    "integration: requires a running Ollama instance and downloaded models",
+]
+addopts = "--verbose --cov=src --cov-report=html --cov-report=term -m 'not integration'"
+
+[tool.setuptools.packages.find]
+where = ["src"]
