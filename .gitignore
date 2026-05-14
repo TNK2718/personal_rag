@@ -212,3 +212,9 @@ node_modules/
 storage/
 data/
 memo/
+*.tsbuildinfo
+
+# Editor / agent local state
+.claude/
+.vscode/
+

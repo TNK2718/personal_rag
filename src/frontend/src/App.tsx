@@ -1,0 +1,25 @@
+import { Route, Routes } from "react-router-dom";
+import Layout from "./components/Layout";
+import Dashboard from "./routes/Dashboard";
+import Ask from "./routes/Ask";
+import Documents from "./routes/Documents";
+import DocumentDetail from "./routes/DocumentDetail";
+import Todos from "./routes/Todos";
+import Entities from "./routes/Entities";
+import Ingest from "./routes/Ingest";
+
+export default function App() {
+  return (
+    <Routes>
+      <Route element={<Layout />}>
+        <Route index element={<Dashboard />} />
+        <Route path="ask" element={<Ask />} />
+        <Route path="documents" element={<Documents />} />
+        <Route path="documents/:id" element={<DocumentDetail />} />
+        <Route path="todos" element={<Todos />} />
+        <Route path="entities" element={<Entities />} />
+        <Route path="ingest" element={<Ingest />} />
+      </Route>
+    </Routes>
+  );
+}
