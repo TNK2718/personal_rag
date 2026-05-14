@@ -25,11 +25,12 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from docdb.llm.base import LLMProtocol
-from docdb.models import Citation, Document, Entity
+from docdb.models import Citation, Document, Entity, Relation
 from docdb.search import direct
 from docdb.search.hybrid import hybrid_search
 from docdb.search.sql_guard import UnsafeQueryError, validate_readonly_sql
 from docdb.search.text2sql import ALLOWED_TABLES
+from docdb.typing.registry import list_entity_types, list_relation_types
 
 
 # ---------------------------------------------------------------------------
@@ -191,15 +192,35 @@ class Toolbox:
                 parameters={"type": "object", "properties": {}},
             ),
             ToolSpec(
+                name="list_entity_types",
+                description=(
+                    "Return every registered entity type with its slug, label, and "
+                    "fields_schema. Call this before search_entities when the user "
+                    "asks about a kind of thing (tasks, people, meetings, ...) so "
+                    "you know what type_slug to filter by and which custom fields "
+                    "exist."
+                ),
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolSpec(
+                name="list_relation_types",
+                description="Return every registered relation type with its slug and endpoints.",
+                parameters={"type": "object", "properties": {}},
+            ),
+            ToolSpec(
                 name="search_entities",
-                description="Find entities by partial canonical name, optionally filtered by entity_type.",
+                description=(
+                    "Find entities by partial canonical name, optionally filtered "
+                    "by type_slug. The set of valid type slugs comes from "
+                    "list_entity_types — it is NOT a fixed enum."
+                ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "name_partial": {"type": "string"},
-                        "entity_type": {
+                        "type_slug": {
                             "type": "string",
-                            "enum": ["person", "org", "product", "tech", "place", "other"],
+                            "description": "Slug from list_entity_types (e.g. 'task', 'person').",
                         },
                         "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
                     },
@@ -219,16 +240,18 @@ class Toolbox:
                 },
             ),
             ToolSpec(
-                name="list_todos",
-                description="Return TODOs filtered by status and/or due date.",
+                name="search_relations",
+                description=(
+                    "Find relations (property-graph edges) by source/target entity id "
+                    "and/or relation type_slug. Useful for questions like "
+                    "'who is assigned to X' or 'what tasks does Alice own'."
+                ),
                 parameters={
                     "type": "object",
                     "properties": {
-                        "status": {
-                            "type": "string",
-                            "enum": ["pending", "in_progress", "completed", "cancelled"],
-                        },
-                        "due_before": {"type": "string"},
+                        "source_entity_id": {"type": "string"},
+                        "target_entity_id": {"type": "string"},
+                        "type_slug": {"type": "string"},
                         "top_k": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
                     },
                 },
@@ -237,7 +260,7 @@ class Toolbox:
                 name="execute_readonly_sql",
                 description=(
                     "Last-resort escape hatch: execute a hand-crafted SELECT "
-                    "against the documents/entities/tags/todos schema. The "
+                    "against the documents/entities/relations/tags schema. The "
                     "SQL is validated by the same guard the rest of the "
                     "system uses (SELECT-only, allowlisted tables, auto LIMIT)."
                 ),
@@ -254,9 +277,11 @@ class Toolbox:
             "find_similar": self._find_similar,
             "get_document": self._get_document,
             "list_doc_types": self._list_doc_types,
+            "list_entity_types": self._list_entity_types,
+            "list_relation_types": self._list_relation_types,
             "search_entities": self._search_entities,
             "get_entity_documents": self._get_entity_documents,
-            "list_todos": self._list_todos,
+            "search_relations": self._search_relations,
             "execute_readonly_sql": self._execute_readonly_sql,
         }
         return specs, handlers
@@ -313,17 +338,40 @@ class Toolbox:
             for name, count in direct.list_doc_types(self.conn)
         ]
 
+    def _list_entity_types(self) -> list[dict]:
+        return [
+            {
+                "slug": t.slug,
+                "label": t.label,
+                "description": t.description,
+                "fields": [f.model_dump(exclude_none=True) for f in t.fields],
+            }
+            for t in list_entity_types(self.conn)
+        ]
+
+    def _list_relation_types(self) -> list[dict]:
+        return [
+            {
+                "slug": t.slug,
+                "label": t.label,
+                "description": t.description,
+                "source_type_slug": t.source_type_slug,
+                "target_type_slug": t.target_type_slug,
+            }
+            for t in list_relation_types(self.conn)
+        ]
+
     def _search_entities(
         self,
         name_partial: str,
-        entity_type: str | None = None,
+        type_slug: str | None = None,
         top_k: int = 10,
     ) -> list[dict]:
         top_k = min(int(top_k), self.max_results)
         return [
             _entity_to_dict(e)
             for e in direct.search_entities(
-                self.conn, name_partial, entity_type=entity_type, top_k=top_k
+                self.conn, name_partial, type_slug=type_slug, top_k=top_k
             )
         ]
 
@@ -334,25 +382,24 @@ class Toolbox:
             for d in direct.get_entity_documents(self.conn, entity_id, top_k=top_k)
         ]
 
-    def _list_todos(
+    def _search_relations(
         self,
-        status: str | None = None,
-        due_before: str | None = None,
+        source_entity_id: str | None = None,
+        target_entity_id: str | None = None,
+        type_slug: str | None = None,
         top_k: int = 50,
     ) -> list[dict]:
         top_k = min(int(top_k), self.max_results)
-        sql = "SELECT * FROM todos WHERE 1=1"
-        params: list[Any] = []
-        if status is not None:
-            sql += " AND status = ?"
-            params.append(status)
-        if due_before is not None:
-            sql += " AND (due_date IS NOT NULL AND due_date <= ?)"
-            params.append(due_before)
-        sql += " ORDER BY COALESCE(due_date, '9999-99-99') ASC, priority DESC LIMIT ?"
-        params.append(top_k)
-        rows = self.conn.execute(sql, params).fetchall()
-        return [dict(r) for r in rows]
+        return [
+            _relation_to_dict(r)
+            for r in direct.search_relations(
+                self.conn,
+                source_entity_id=source_entity_id,
+                target_entity_id=target_entity_id,
+                type_slug=type_slug,
+                top_k=top_k,
+            )
+        ]
 
     def _execute_readonly_sql(self, sql: str) -> dict:
         try:
@@ -395,3 +442,7 @@ def _document_to_dict(d: Document) -> dict:
 
 def _entity_to_dict(e: Entity) -> dict:
     return e.model_dump()
+
+
+def _relation_to_dict(r: Relation) -> dict:
+    return r.model_dump()

@@ -48,16 +48,21 @@ export interface RelationTypeDef extends TypeDefBase {
   target_type_slug: string | null;
 }
 
-export type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
-export type Priority = "high" | "medium" | "low";
-export type EntityType = "person" | "org" | "product" | "tech" | "place" | "other";
+// ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
+export interface EntityTypeCount {
+  type_slug: string;
+  label: string | null;
+  count: number;
+}
 
 export interface Stats {
   documents_total: number;
   doc_types: Array<{ doc_type: string; count: number }>;
-  todos_total: number;
-  todos_by_status: Partial<Record<TodoStatus, number>>;
   entities_total: number;
+  entities_by_type: EntityTypeCount[];
+  relations_total: number;
   tags_total: number;
 }
 
@@ -87,28 +92,26 @@ export interface DocumentListResponse {
   offset: number;
 }
 
-export interface Todo {
-  id: string;
-  content: string;
-  status: TodoStatus;
-  priority: Priority;
-  due_date: string | null;
-  source_document_id: string | null;
-  source_section: string | null;
-  created_at: string | null;
-  updated_at: string | null;
-  source_title?: string | null;
-  source_path?: string | null;
-}
-
+// ---------------------------------------------------------------------------
+// Property-graph instances (Stage 2)
+// ---------------------------------------------------------------------------
 export interface EntityRef {
   id: string;
+  type_slug: string;
   canonical_name: string;
-  entity_type: EntityType;
   aliases: string[];
   description?: string | null;
+  fields?: Record<string, unknown>;
   mention_total?: number;
   mention_count?: number;
+}
+
+export interface RelationRef {
+  id: string;
+  type_slug: string;
+  source_entity_id: string;
+  target_entity_id: string;
+  fields: Record<string, unknown>;
 }
 
 export interface TagRef {
@@ -132,7 +135,6 @@ export interface DocumentDetail {
   content_hash: string;
   language: string | null;
   metadata: Record<string, unknown>;
-  todos: Todo[];
   entities: EntityRef[];
   tags: TagRef[];
 }
@@ -159,9 +161,8 @@ export interface IngestionReport {
   source_path: string;
   status: "created" | "updated" | "skipped" | "error";
   document_id: string | null;
-  todos_added: number;
-  entities_added: number;
   tags_added: number;
+  entities_added_by_type: Record<string, number>;
   error: string | null;
   extraction_error: string | null;
 }

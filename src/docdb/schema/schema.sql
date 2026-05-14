@@ -1,4 +1,4 @@
--- DocDB schema v2
+-- DocDB schema v3
 -- All tables intended for the agentic search layer are defined here.
 -- Virtual tables (FTS5, sqlite-vec) require the respective extensions
 -- to be loaded on the connection before this DDL is applied.
@@ -77,23 +77,82 @@ CREATE INDEX IF NOT EXISTS idx_relation_types_src ON relation_types(source_type_
 CREATE INDEX IF NOT EXISTS idx_relation_types_dst ON relation_types(target_type_slug);
 
 -- ============================================================
--- Entities (LEGACY — to be dropped in Stage 2)
--- Current shape uses a fixed entity_type enum. Property-graph entities
--- replace this table in Stage 2 once the type registry is in place.
+-- Entities (property-graph instances)
+-- Each row is a typed node. ``type_slug`` points at entity_types.slug;
+-- ``fields`` is a JSON object validated by docdb.typing.field_spec against
+-- that type's fields_schema before write.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS entities (
     id              TEXT PRIMARY KEY,
+    type_slug       TEXT NOT NULL,
     canonical_name  TEXT NOT NULL,
-    entity_type     TEXT NOT NULL,     -- 'person' | 'org' | 'product' | 'tech' | 'place' | 'other'
-    aliases         TEXT,              -- JSON array of strings
+    aliases         TEXT NOT NULL DEFAULT '[]',
     description     TEXT,
-    metadata        TEXT,
+    fields          TEXT NOT NULL DEFAULT '{}',
     created_ts      TEXT NOT NULL DEFAULT (datetime('now')),
-    UNIQUE(canonical_name, entity_type)
+    updated_ts      TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(type_slug, canonical_name),
+    CHECK (json_valid(aliases) AND json_valid(fields)),
+    FOREIGN KEY(type_slug) REFERENCES entity_types(slug) ON DELETE RESTRICT
 );
 
+CREATE INDEX IF NOT EXISTS idx_entities_type      ON entities(type_slug);
 CREATE INDEX IF NOT EXISTS idx_entities_canonical ON entities(canonical_name);
-CREATE INDEX IF NOT EXISTS idx_entities_type      ON entities(entity_type);
+
+-- Property-graph edges. Source and target reference entities. ``fields`` is
+-- validated by docdb.typing.field_spec against relation_types.fields_schema.
+CREATE TABLE IF NOT EXISTS relations (
+    id                 TEXT PRIMARY KEY,
+    type_slug          TEXT NOT NULL,
+    source_entity_id   TEXT NOT NULL,
+    target_entity_id   TEXT NOT NULL,
+    fields             TEXT NOT NULL DEFAULT '{}',
+    created_ts         TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_ts         TEXT NOT NULL DEFAULT (datetime('now')),
+    UNIQUE(type_slug, source_entity_id, target_entity_id),
+    CHECK (json_valid(fields)),
+    FOREIGN KEY(type_slug)        REFERENCES relation_types(slug) ON DELETE RESTRICT,
+    FOREIGN KEY(source_entity_id) REFERENCES entities(id)         ON DELETE CASCADE,
+    FOREIGN KEY(target_entity_id) REFERENCES entities(id)         ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_relations_source ON relations(source_entity_id);
+CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_entity_id);
+CREATE INDEX IF NOT EXISTS idx_relations_type   ON relations(type_slug);
+
+-- ============================================================
+-- Entity search shadow (Python-maintained) + trigram FTS
+-- ``searchable_text`` concatenates canonical_name, aliases, description and
+-- string-typed field values. The store layer rewrites this row on every
+-- entity upsert; tests and direct CRUD callers must go through the store.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS entities_search (
+    entity_id        TEXT PRIMARY KEY,
+    searchable_text  TEXT NOT NULL,
+    FOREIGN KEY(entity_id) REFERENCES entities(id) ON DELETE CASCADE
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS entities_fts USING fts5(
+    searchable_text,
+    tokenize = 'trigram',
+    content = 'entities_search',
+    content_rowid = 'rowid'
+);
+
+CREATE TRIGGER IF NOT EXISTS entities_search_ai AFTER INSERT ON entities_search BEGIN
+    INSERT INTO entities_fts(rowid, searchable_text) VALUES (new.rowid, new.searchable_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entities_search_ad AFTER DELETE ON entities_search BEGIN
+    INSERT INTO entities_fts(entities_fts, rowid, searchable_text)
+    VALUES ('delete', old.rowid, old.searchable_text);
+END;
+
+CREATE TRIGGER IF NOT EXISTS entities_search_au AFTER UPDATE ON entities_search BEGIN
+    INSERT INTO entities_fts(entities_fts, rowid, searchable_text)
+    VALUES ('delete', old.rowid, old.searchable_text);
+    INSERT INTO entities_fts(rowid, searchable_text)
+    VALUES (new.rowid, new.searchable_text);
+END;
 
 -- ============================================================
 -- Tags
@@ -114,12 +173,26 @@ CREATE TABLE IF NOT EXISTS document_entities (
     document_id    TEXT NOT NULL,
     entity_id      TEXT NOT NULL,
     mention_count  INTEGER NOT NULL DEFAULT 1,
-    contexts       TEXT,               -- JSON array of short snippets
+    contexts       TEXT NOT NULL DEFAULT '[]',   -- JSON array of short snippets
     PRIMARY KEY(document_id, entity_id),
+    CHECK (json_valid(contexts)),
     FOREIGN KEY(document_id) REFERENCES documents(id) ON DELETE CASCADE,
     FOREIGN KEY(entity_id)   REFERENCES entities(id)  ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_de_entity ON document_entities(entity_id);
+
+-- Provenance for property-graph relations. Lets the UI answer "which doc
+-- produced this edge?" and ingestion clean up stale relations on re-ingest.
+CREATE TABLE IF NOT EXISTS document_relation_mentions (
+    document_id  TEXT NOT NULL,
+    relation_id  TEXT NOT NULL,
+    contexts     TEXT NOT NULL DEFAULT '[]',
+    PRIMARY KEY(document_id, relation_id),
+    CHECK (json_valid(contexts)),
+    FOREIGN KEY(document_id) REFERENCES documents(id)  ON DELETE CASCADE,
+    FOREIGN KEY(relation_id) REFERENCES relations(id)  ON DELETE CASCADE
+);
+CREATE INDEX IF NOT EXISTS idx_drm_relation ON document_relation_mentions(relation_id);
 
 CREATE TABLE IF NOT EXISTS document_tags (
     document_id TEXT NOT NULL,
@@ -143,24 +216,6 @@ CREATE TABLE IF NOT EXISTS document_relations (
     FOREIGN KEY(dst_document_id) REFERENCES documents(id) ON DELETE CASCADE
 );
 CREATE INDEX IF NOT EXISTS idx_dr_dst ON document_relations(dst_document_id);
-
--- ============================================================
--- TODOs (extracted from documents; first-class object)
--- ============================================================
-CREATE TABLE IF NOT EXISTS todos (
-    id                  TEXT PRIMARY KEY,
-    content             TEXT NOT NULL,
-    status              TEXT NOT NULL DEFAULT 'pending',  -- pending | in_progress | completed | cancelled
-    priority            TEXT NOT NULL DEFAULT 'medium',   -- high | medium | low
-    due_date            TEXT,
-    source_document_id  TEXT,
-    source_section      TEXT,
-    created_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    updated_at          TEXT NOT NULL DEFAULT (datetime('now')),
-    FOREIGN KEY(source_document_id) REFERENCES documents(id) ON DELETE SET NULL
-);
-CREATE INDEX IF NOT EXISTS idx_todos_status ON todos(status);
-CREATE INDEX IF NOT EXISTS idx_todos_due    ON todos(due_date) WHERE status != 'completed';
 
 -- ============================================================
 -- Extraction provenance
@@ -223,4 +278,4 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tags_vec USING vec0(
     embedding float[1024]
 );
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (2);
+INSERT OR IGNORE INTO schema_version(version) VALUES (3);

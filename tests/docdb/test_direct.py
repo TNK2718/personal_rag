@@ -153,8 +153,8 @@ def test_search_entities_partial_name(populated_db) -> None:
 
 
 def test_search_entities_with_type_filter(populated_db) -> None:
-    results = search_entities(populated_db, "", entity_type="tech")
-    assert {e.canonical_name for e in results} == {"Python"}
+    results = search_entities(populated_db, "", type_slug="task")
+    assert {e.canonical_name for e in results} == {"設計レビュー実施"}
 
 
 def test_get_entity_documents_returns_linked(populated_db) -> None:

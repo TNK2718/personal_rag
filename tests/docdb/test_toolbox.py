@@ -132,41 +132,25 @@ def test_get_entity_documents(toolbox: Toolbox) -> None:
 
 
 # ---------------------------------------------------------------------------
-# list_todos
+# list_entity_types / search_relations (Stage 2)
 # ---------------------------------------------------------------------------
-def test_list_todos_returns_pending_by_default(toolbox: Toolbox) -> None:
-    inv = toolbox.invoke("list_todos", {"status": "pending"})
+def test_list_entity_types_returns_seed_slugs(toolbox: Toolbox) -> None:
+    inv = toolbox.invoke("list_entity_types", {})
     assert inv.succeeded
-    assert all(t["status"] == "pending" for t in inv.result)
+    slugs = {t["slug"] for t in inv.result}
+    assert {"person", "org", "place", "task"}.issubset(slugs)
 
 
-def test_list_todos_filters_by_due_before(populated_db) -> None:
-    from docdb.ingestion.store import DocumentStore
-    from docdb.models import Todo, todo_id_for, now_iso
+def test_search_relations_empty_by_default(toolbox: Toolbox) -> None:
+    inv = toolbox.invoke("search_relations", {})
+    assert inv.succeeded
+    assert inv.result == []
 
-    store = DocumentStore(populated_db)
-    store.upsert_todo(
-        Todo(
-            id=todo_id_for(None, "近い締切"),
-            content="近い締切",
-            due_date="2026-05-01",
-            created_at=now_iso(),
-        )
-    )
-    store.upsert_todo(
-        Todo(
-            id=todo_id_for(None, "遠い締切"),
-            content="遠い締切",
-            due_date="2027-01-01",
-            created_at=now_iso(),
-        )
-    )
 
-    tb = Toolbox(populated_db, FakeLLM())
-    inv = tb.invoke("list_todos", {"due_before": "2026-06-01"})
-    contents = [t["content"] for t in inv.result]
-    assert "近い締切" in contents
-    assert "遠い締切" not in contents
+def test_search_entities_filters_by_type_slug(toolbox: Toolbox) -> None:
+    inv = toolbox.invoke("search_entities", {"name_partial": "", "type_slug": "task"})
+    assert inv.succeeded
+    assert {e["canonical_name"] for e in inv.result} == {"設計レビュー実施"}
 
 
 # ---------------------------------------------------------------------------

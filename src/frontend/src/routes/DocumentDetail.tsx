@@ -49,21 +49,6 @@ export default function DocumentDetail() {
             <p className={styles.summary}>{data.summary || "—"}</p>
           </Section>
 
-          <Section title={`Todos (${data.todos.length})`}>
-            {data.todos.length === 0 ? (
-              <div className={styles.muted}>—</div>
-            ) : (
-              <ul className={styles.list}>
-                {data.todos.map((t) => (
-                  <li key={t.id}>
-                    <Badge>{t.status}</Badge>
-                    <span style={{ marginLeft: 6 }}>{t.content}</span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Section>
-
           <Section title={`Entities (${data.entities.length})`}>
             {data.entities.length === 0 ? (
               <div className={styles.muted}>—</div>
@@ -72,7 +57,7 @@ export default function DocumentDetail() {
                 {data.entities.map((e) => (
                   <li key={e.id}>
                     <span>{e.canonical_name}</span>
-                    <Badge tone="muted">{e.entity_type}</Badge>
+                    <Badge tone="muted">{e.type_slug}</Badge>
                   </li>
                 ))}
               </ul>

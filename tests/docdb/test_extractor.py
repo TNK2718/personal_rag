@@ -19,7 +19,7 @@ from docdb.ingestion.extractor import Extractor
 from docdb.ingestion.parser import Parser
 from docdb.llm.fake import FakeLLM
 from docdb.llm.prompts import EXTRACTION_SYSTEM, build_extraction_user_prompt
-from docdb.models import ExtractedEntity, ExtractedTodo, ExtractionResult
+from docdb.models import ExtractionResult
 
 
 @pytest.fixture
@@ -77,9 +77,7 @@ def test_extractor_calls_llm_once_with_correct_schema(parser: Parser) -> None:
         doc_type="memo",
         title="H",
         summary="本文のサマリ",
-        entities=[ExtractedEntity(name="田中", entity_type="person")],
         tags=["メモ"],
-        todos=[ExtractedTodo(content="作業")],
     )
     fake = FakeLLM(extract_responses=[scripted])
     extractor = Extractor(fake)
@@ -130,8 +128,7 @@ def test_extractor_returns_default_result_on_llm_error(parser: Parser) -> None:
     # Title from the parsed document survives even when extraction
     # fails so the pipeline can still write a usable row.
     assert out.result.title == "H"
-    assert out.result.entities == []
-    assert out.result.todos == []
+    assert out.result.tags == []
 
 
 def test_extractor_truncates_via_max_input_chars(parser: Parser) -> None:

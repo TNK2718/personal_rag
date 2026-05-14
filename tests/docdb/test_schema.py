@@ -22,15 +22,23 @@ EXPECTED_TABLES = {
     "entities",
     "entity_types",
     "relation_types",
+    "relations",
+    "entities_search",
     "tags",
     "document_entities",
+    "document_relation_mentions",
     "document_tags",
     "document_relations",
-    "todos",
     "extraction_runs",
 }
 
-EXPECTED_VIRTUAL_TABLES = {"documents_fts", "documents_vec", "entities_vec", "tags_vec"}
+EXPECTED_VIRTUAL_TABLES = {
+    "documents_fts",
+    "documents_vec",
+    "entities_fts",
+    "entities_vec",
+    "tags_vec",
+}
 
 
 def _table_names(conn: sqlite3.Connection) -> set[str]:
@@ -47,7 +55,7 @@ def test_init_db_creates_every_expected_table(conn: sqlite3.Connection) -> None:
 def test_schema_version_row_is_recorded(conn: sqlite3.Connection) -> None:
     row = conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
     assert row is not None
-    assert row["version"] == 2
+    assert row["version"] == 3
 
 
 def test_init_db_is_idempotent(db_path) -> None:
@@ -80,8 +88,8 @@ def test_document_entities_cascade_on_document_delete(conn: sqlite3.Connection) 
         ("d1", "md", "h1"),
     )
     conn.execute(
-        "INSERT INTO entities(id, canonical_name, entity_type) VALUES (?, ?, ?)",
-        ("e1", "Alice", "person"),
+        "INSERT INTO entities(id, type_slug, canonical_name) VALUES (?, ?, ?)",
+        ("e1", "person", "Alice"),
     )
     conn.execute(
         "INSERT INTO document_entities(document_id, entity_id) VALUES (?, ?)",
@@ -93,6 +101,32 @@ def test_document_entities_cascade_on_document_delete(conn: sqlite3.Connection) 
         "SELECT COUNT(*) AS n FROM document_entities WHERE document_id = ?",
         ("d1",),
     ).fetchone()["n"]
+    assert remaining == 0
+
+
+def test_entity_type_fk_restricts_deletion_with_instances(conn: sqlite3.Connection) -> None:
+    """Deleting an entity_type whose slug is referenced by an entity must fail."""
+    conn.execute(
+        "INSERT INTO entities(id, type_slug, canonical_name) VALUES (?, ?, ?)",
+        ("ent-1", "person", "Bob"),
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        conn.execute("DELETE FROM entity_types WHERE slug = ?", ("person",))
+
+
+def test_relation_round_trip(conn: sqlite3.Connection) -> None:
+    conn.execute("INSERT INTO entities(id, type_slug, canonical_name) VALUES (?, ?, ?)", ("a", "person", "Alice"))
+    conn.execute("INSERT INTO entities(id, type_slug, canonical_name) VALUES (?, ?, ?)", ("b", "task", "design review"))
+    conn.execute(
+        "INSERT INTO relations(id, type_slug, source_entity_id, target_entity_id) VALUES (?, ?, ?, ?)",
+        ("rel-1", "assigned_to", "b", "a"),
+    )
+    row = conn.execute("SELECT * FROM relations WHERE id = ?", ("rel-1",)).fetchone()
+    assert row["source_entity_id"] == "b"
+    assert row["target_entity_id"] == "a"
+    # Deleting either endpoint cascades the relation.
+    conn.execute("DELETE FROM entities WHERE id = ?", ("a",))
+    remaining = conn.execute("SELECT COUNT(*) AS n FROM relations WHERE id = ?", ("rel-1",)).fetchone()["n"]
     assert remaining == 0
 
 

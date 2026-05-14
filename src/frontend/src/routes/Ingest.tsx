@@ -85,9 +85,8 @@ export default function Ingest() {
               <tr>
                 <th>Status</th>
                 <th>Path</th>
-                <th>Todos</th>
-                <th>Entities</th>
                 <th>Tags</th>
+                <th>Entities by type</th>
                 <th>Notes</th>
               </tr>
             </thead>
@@ -98,9 +97,12 @@ export default function Ingest() {
                     <Badge tone={STATUS_TONE[r.status]}>{r.status}</Badge>
                   </td>
                   <td className={styles.path}>{r.source_path}</td>
-                  <td>{r.todos_added || ""}</td>
-                  <td>{r.entities_added || ""}</td>
                   <td>{r.tags_added || ""}</td>
+                  <td>
+                    {Object.entries(r.entities_added_by_type || {})
+                      .map(([slug, n]) => `${slug}:${n}`)
+                      .join(", ")}
+                  </td>
                   <td className={styles.notes}>
                     {r.error && <div className={styles.errorText}>{r.error}</div>}
                     {r.extraction_error && (

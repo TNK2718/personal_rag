@@ -110,25 +110,17 @@ def document_detail(document_id: str):
     if doc is None:
         return jsonify({"error": "document not found"}), 404
 
-    todos = [
-        dict(r)
-        for r in conn.execute(
-            "SELECT * FROM todos WHERE source_document_id = ? "
-            "ORDER BY COALESCE(due_date, '9999-99-99'), priority DESC",
-            (document_id,),
-        ).fetchall()
-    ]
-
     entities = [
         {
             "id": r["id"],
+            "type_slug": r["type_slug"],
             "canonical_name": r["canonical_name"],
-            "entity_type": r["entity_type"],
             "aliases": _json_or_empty_list(r["aliases"]),
+            "fields": _json_or_empty_dict(r["fields"]),
             "mention_count": int(r["mention_count"]),
         }
         for r in conn.execute(
-            "SELECT e.id, e.canonical_name, e.entity_type, e.aliases, de.mention_count "
+            "SELECT e.id, e.type_slug, e.canonical_name, e.aliases, e.fields, de.mention_count "
             "FROM entities AS e "
             "JOIN document_entities AS de ON de.entity_id = e.id "
             "WHERE de.document_id = ? "
@@ -155,7 +147,6 @@ def document_detail(document_id: str):
     ]
 
     payload = doc.model_dump()
-    payload["todos"] = todos
     payload["entities"] = entities
     payload["tags"] = tags
     return jsonify(payload)
@@ -207,3 +198,13 @@ def _json_or_empty_list(value):
     except (ValueError, TypeError):
         return []
     return out if isinstance(out, list) else []
+
+
+def _json_or_empty_dict(value):
+    if not value:
+        return {}
+    try:
+        out = json.loads(value)
+    except (ValueError, TypeError):
+        return {}
+    return out if isinstance(out, dict) else {}

@@ -14,7 +14,6 @@ from tests.docdb.fixtures import (
     SAMPLE_DOCS,
     SAMPLE_ENTITIES,
     SAMPLE_TAGS,
-    SAMPLE_TODOS,
 )
 
 
@@ -41,8 +40,6 @@ def seeded_db(settings: Settings) -> Settings:
             store.upsert_entity(ent)
         for tag in SAMPLE_TAGS:
             store.upsert_tag(tag)
-        for todo in SAMPLE_TODOS:
-            store.upsert_todo(todo)
         # Link the project-A meeting to entity "プロジェクトA".
         store.link_document_entity(
             SAMPLE_DOCS[1].id, SAMPLE_ENTITIES[1].id, mention_count=3, contexts=["..."]

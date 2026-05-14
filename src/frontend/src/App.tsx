@@ -4,7 +4,6 @@ import Dashboard from "./routes/Dashboard";
 import Ask from "./routes/Ask";
 import Documents from "./routes/Documents";
 import DocumentDetail from "./routes/DocumentDetail";
-import Todos from "./routes/Todos";
 import Entities from "./routes/Entities";
 import Ingest from "./routes/Ingest";
 import Settings from "./routes/Settings";
@@ -17,7 +16,6 @@ export default function App() {
         <Route path="ask" element={<Ask />} />
         <Route path="documents" element={<Documents />} />
         <Route path="documents/:id" element={<DocumentDetail />} />
-        <Route path="todos" element={<Todos />} />
         <Route path="entities" element={<Entities />} />
         <Route path="ingest" element={<Ingest />} />
         <Route path="settings" element={<Settings />} />

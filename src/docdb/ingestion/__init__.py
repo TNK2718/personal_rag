@@ -6,7 +6,6 @@ LLM-based extraction, normalisation, and an orchestrator on top.
 
 from docdb.ingestion.extractor import Extractor, ExtractionOutcome
 from docdb.ingestion.normalizer import (
-    DocumentEntityLink,
     DocumentTagLink,
     NormalizedExtraction,
     canonicalize_entity_name,
@@ -20,7 +19,6 @@ from docdb.ingestion.store import DocumentStore
 
 __all__ = [
     "DocumentStore",
-    "DocumentEntityLink",
     "DocumentTagLink",
     "Extractor",
     "ExtractionOutcome",

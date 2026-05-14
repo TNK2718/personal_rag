@@ -46,11 +46,12 @@ class IngestionReport:
     source_path: str
     status: Status
     document_id: str | None = None
-    todos_added: int = 0
-    entities_added: int = 0
     tags_added: int = 0
     error: str | None = None
     extraction_error: str | None = None  # non-fatal
+    # Stage 3 will populate this with per-type instance counts; for now
+    # ingestion intentionally writes no entities or relations.
+    entities_added_by_type: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -151,18 +152,12 @@ class IngestionPipeline:
 
         self.store.upsert_document(doc, embedding=embedding)
 
+        # Stage 2: extraction is reduced to the document header + tags.
+        # Stage 3 reinstates entity/relation extraction using the runtime
+        # type registry. Until then, ingest writes doc + tags only.
         norm = normalize_extraction(result, document_id=doc_id)
-        for ent in norm.entities:
-            self.store.upsert_entity(ent)
         for tag in norm.tags:
             self.store.upsert_tag(tag)
-        for link in norm.entity_links:
-            self.store.link_document_entity(
-                link.document_id,
-                link.entity_id,
-                mention_count=link.mention_count,
-                contexts=link.contexts,
-            )
         for link in norm.tag_links:
             self.store.link_document_tag(
                 link.document_id,
@@ -170,15 +165,11 @@ class IngestionPipeline:
                 confidence=link.confidence,
                 source=link.source,
             )
-        for todo in norm.todos:
-            self.store.upsert_todo(todo)
 
         return IngestionReport(
             source_path=parsed.source_path,
             status="updated" if is_update else "created",
             document_id=doc_id,
-            todos_added=len(norm.todos),
-            entities_added=len(norm.entities),
             tags_added=len(norm.tags),
             extraction_error=outcome.error,
         )
