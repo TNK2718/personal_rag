@@ -168,10 +168,15 @@ def test_allowed_tables_default_matches_schema() -> None:
         "documents",
         "documents_fts",
         "entities",
+        "entity_types",
+        "entities_search",
+        "entities_fts",
+        "relations",
+        "relation_types",
         "tags",
         "document_entities",
         "document_tags",
         "document_relations",
-        "todos",
+        "document_relation_mentions",
     }
     assert ALLOWED_TABLES == expected

@@ -1,8 +1,9 @@
-"""DocumentStore (writer) contract tests."""
+"""DocumentStore (writer) contract tests for the property-graph schema."""
 
 from __future__ import annotations
 
 import json
+import sqlite3
 
 import pytest
 
@@ -10,13 +11,13 @@ from docdb.ingestion.store import DocumentStore, pack_embedding, unpack_embeddin
 from docdb.models import (
     Document,
     Entity,
+    Relation,
     Tag,
-    Todo,
     content_hash_for,
     document_id_for,
     entity_id_for,
+    relation_id_for,
     tag_id_for,
-    todo_id_for,
 )
 
 
@@ -106,21 +107,21 @@ def test_delete_by_source_removes_matching_documents(conn) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Entities and tags
+# Entities (property-graph nodes)
 # ---------------------------------------------------------------------------
 def test_upsert_entity_inserts_and_updates(conn) -> None:
     store = DocumentStore(conn)
     e = Entity(
-        id=entity_id_for("Alice", "person"),
+        id=entity_id_for("person", "Alice"),
+        type_slug="person",
         canonical_name="Alice",
-        entity_type="person",
         aliases=["A"],
     )
     store.upsert_entity(e)
     e2 = Entity(
         id=e.id,
+        type_slug="person",
         canonical_name="Alice",
-        entity_type="person",
         aliases=["A", "Ali"],
         description="updated",
     )
@@ -131,6 +132,137 @@ def test_upsert_entity_inserts_and_updates(conn) -> None:
     assert row["description"] == "updated"
 
 
+def test_upsert_entity_validates_fields_against_registry(conn) -> None:
+    """Task entity has a required `status` enum — bad values must be rejected."""
+    store = DocumentStore(conn)
+    good = Entity(
+        id=entity_id_for("task", "write tests"),
+        type_slug="task",
+        canonical_name="write tests",
+        fields={"status": "pending", "priority": "high"},
+    )
+    store.upsert_entity(good)
+
+    bad = Entity(
+        id=entity_id_for("task", "bogus"),
+        type_slug="task",
+        canonical_name="bogus",
+        fields={"status": "definitely_not_a_status", "priority": "medium"},
+    )
+    with pytest.raises(ValueError):
+        store.upsert_entity(bad)
+
+
+def test_upsert_entity_rejects_unknown_type_slug(conn) -> None:
+    store = DocumentStore(conn)
+    e = Entity(
+        id=entity_id_for("alien", "x"),
+        type_slug="alien",  # not in entity_types
+        canonical_name="x",
+    )
+    with pytest.raises(ValueError):
+        store.upsert_entity(e)
+
+
+def test_upsert_entity_refreshes_search_shadow(conn) -> None:
+    store = DocumentStore(conn)
+    e = Entity(
+        id=entity_id_for("person", "田中"),
+        type_slug="person",
+        canonical_name="田中",
+        aliases=["Tanaka"],
+        description="社内のデザイナー",
+    )
+    store.upsert_entity(e)
+    row = conn.execute(
+        "SELECT searchable_text FROM entities_search WHERE entity_id = ?", (e.id,)
+    ).fetchone()
+    assert row is not None
+    assert "田中" in row["searchable_text"]
+    assert "Tanaka" in row["searchable_text"]
+    assert "デザイナー" in row["searchable_text"]
+
+
+def test_delete_entity_removes_row_and_search_shadow(conn) -> None:
+    store = DocumentStore(conn)
+    e = Entity(
+        id=entity_id_for("person", "X"),
+        type_slug="person",
+        canonical_name="X",
+    )
+    store.upsert_entity(e)
+    assert store.delete_entity(e.id) is True
+    assert (
+        conn.execute("SELECT COUNT(*) AS n FROM entities WHERE id = ?", (e.id,)).fetchone()["n"]
+        == 0
+    )
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) AS n FROM entities_search WHERE entity_id = ?", (e.id,)
+        ).fetchone()["n"]
+        == 0
+    )
+
+
+# ---------------------------------------------------------------------------
+# Relations (property-graph edges)
+# ---------------------------------------------------------------------------
+def test_upsert_relation_inserts_and_updates(conn) -> None:
+    store = DocumentStore(conn)
+    person = Entity(
+        id=entity_id_for("person", "Alice"),
+        type_slug="person",
+        canonical_name="Alice",
+    )
+    task = Entity(
+        id=entity_id_for("task", "design"),
+        type_slug="task",
+        canonical_name="design",
+        fields={"status": "pending", "priority": "medium"},
+    )
+    store.upsert_entity(person)
+    store.upsert_entity(task)
+
+    rel = Relation(
+        id=relation_id_for("assigned_to", task.id, person.id),
+        type_slug="assigned_to",
+        source_entity_id=task.id,
+        target_entity_id=person.id,
+    )
+    store.upsert_relation(rel)
+
+    row = conn.execute("SELECT * FROM relations WHERE id = ?", (rel.id,)).fetchone()
+    assert row["type_slug"] == "assigned_to"
+
+
+def test_upsert_relation_rejects_unknown_type_slug(conn) -> None:
+    store = DocumentStore(conn)
+    rel = Relation(
+        id="rel-bogus",
+        type_slug="not_a_real_relation",
+        source_entity_id="x",
+        target_entity_id="y",
+    )
+    with pytest.raises(ValueError):
+        store.upsert_relation(rel)
+
+
+def test_upsert_relation_fk_to_entities_enforced(conn) -> None:
+    store = DocumentStore(conn)
+    # Source/target entities don't exist → FK violation surfaces as IntegrityError.
+    rel = Relation(
+        id="rel-1",
+        type_slug="mentions",
+        source_entity_id="ent-missing-a",
+        target_entity_id="ent-missing-b",
+    )
+    with pytest.raises(sqlite3.IntegrityError):
+        store.upsert_relation(rel)
+
+
+# ---------------------------------------------------------------------------
+# Tags + junctions
+# ---------------------------------------------------------------------------
 def test_upsert_tag_is_idempotent_on_canonical_name(conn) -> None:
     store = DocumentStore(conn)
     t = Tag(id=tag_id_for("python"), canonical_name="python", category="tech")
@@ -145,7 +277,11 @@ def test_link_document_entity_and_tag_are_idempotent(conn) -> None:
     store = DocumentStore(conn)
     doc = _make_doc("hello")
     store.upsert_document(doc)
-    e = Entity(id=entity_id_for("X", "org"), canonical_name="X", entity_type="org")
+    e = Entity(
+        id=entity_id_for("org", "X"),
+        type_slug="org",
+        canonical_name="X",
+    )
     t = Tag(id=tag_id_for("tag1"), canonical_name="tag1")
     store.upsert_entity(e)
     store.upsert_tag(t)
@@ -166,36 +302,6 @@ def test_link_document_entity_and_tag_are_idempotent(conn) -> None:
     assert de["mention_count"] == 3
     assert dt["confidence"] == pytest.approx(0.5)
     assert dt["source"] == "llm"
-
-
-# ---------------------------------------------------------------------------
-# Todos
-# ---------------------------------------------------------------------------
-def test_upsert_todo_inserts_and_updates_in_place(conn) -> None:
-    store = DocumentStore(conn)
-    doc = _make_doc("hello")
-    store.upsert_document(doc)
-
-    todo = Todo(
-        id=todo_id_for(doc.id, "write tests"),
-        content="write tests",
-        priority="high",
-        source_document_id=doc.id,
-    )
-    store.upsert_todo(todo)
-    todo2 = Todo(
-        id=todo.id,
-        content="write tests",
-        status="in_progress",
-        priority="medium",
-        source_document_id=doc.id,
-    )
-    store.upsert_todo(todo2)
-
-    row = conn.execute("SELECT * FROM todos WHERE id = ?", (todo.id,)).fetchone()
-    assert row["status"] == "in_progress"
-    assert row["priority"] == "medium"
-    assert conn.execute("SELECT COUNT(*) AS n FROM todos").fetchone()["n"] == 1
 
 
 # ---------------------------------------------------------------------------

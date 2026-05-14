@@ -52,7 +52,7 @@ def test_extract_falls_back_to_default_instance_when_unscripted() -> None:
     result = fake.extract("anything", ExtractionResult)
     # Default ExtractionResult has empty fields and doc_type='other'.
     assert result.doc_type == "other"
-    assert result.entities == []
+    assert result.tags == []
 
 
 def test_extract_type_mismatch_raises_clearly() -> None:

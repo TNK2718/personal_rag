@@ -7,9 +7,10 @@ What gets covered:
     * `init` creates the DB file and applies schema.
     * `ingest` and `ingest-dir` write rows that `stats` and `search`
       then read back.
-    * `migrate-todos` imports a legacy todos.json shape and links to
-      the matching document by source_path when one exists.
     * `--db` overrides the configured DB path.
+
+Note: the legacy ``migrate-todos`` subcommand was removed in Stage 2 of
+the property-graph redesign along with the dedicated ``todos`` table.
 """
 
 from __future__ import annotations
@@ -23,7 +24,7 @@ from click.testing import CliRunner
 from docdb.cli import main
 from docdb.config import Settings
 from docdb.llm.fake import FakeLLM, StubChatCompletion
-from docdb.models import ExtractedEntity, ExtractedTodo, ExtractionResult
+from docdb.models import ExtractionResult
 
 
 def _factory(*results: ExtractionResult):
@@ -80,8 +81,6 @@ def test_ingest_then_stats_then_search(runner: CliRunner, tmp_path: Path) -> Non
         summary="契約解除の規定",
         language="ja",
         tags=["契約"],
-        entities=[ExtractedEntity(name="解約条項", entity_type="other")],
-        todos=[ExtractedTodo(content="関係者に共有")],
     )
 
     ingest_result = runner.invoke(
@@ -243,107 +242,3 @@ def test_ask_handles_no_answer_path(runner: CliRunner, tmp_path: Path) -> None:
     assert "(no answer)" in result.output
 
 
-# ---------------------------------------------------------------------------
-# migrate-todos
-# ---------------------------------------------------------------------------
-def test_migrate_todos_imports_legacy_json(runner: CliRunner, tmp_path: Path) -> None:
-    db = tmp_path / "docdb.sqlite"
-
-    legacy = [
-        {
-            "id": "legacy-1",
-            "content": "古いタスク",
-            "status": "in_progress",
-            "priority": "high",
-            "due_date": "2026-06-30",
-            "source_file": "memo/legacy.md",
-            "source_section": "TODO",
-            "created_at": "2025-12-01T09:00:00",
-            "updated_at": "2026-01-15T10:00:00",
-        },
-        {
-            "id": "legacy-2",
-            "content": "",  # empty → must be skipped
-            "status": "pending",
-            "priority": "low",
-            "source_file": "",
-            "source_section": "",
-            "created_at": "",
-            "updated_at": "",
-        },
-    ]
-    legacy_path = tmp_path / "todos.json"
-    legacy_path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
-
-    result = runner.invoke(
-        main, ["--db", str(db), "migrate-todos", str(legacy_path)]
-    )
-    assert result.exit_code == 0, result.output
-    assert "imported=1" in result.output
-    assert "skipped=1" in result.output
-
-    # The single imported todo lives under the right shape.
-    import sqlite3
-
-    with sqlite3.connect(db) as c:
-        c.row_factory = sqlite3.Row
-        rows = c.execute(
-            "SELECT content, status, priority, due_date FROM todos"
-        ).fetchall()
-    assert len(rows) == 1
-    assert rows[0]["content"] == "古いタスク"
-    assert rows[0]["status"] == "in_progress"
-    assert rows[0]["priority"] == "high"
-    assert rows[0]["due_date"] == "2026-06-30"
-
-
-def test_migrate_todos_links_to_existing_document(
-    runner: CliRunner, tmp_path: Path
-) -> None:
-    db = tmp_path / "docdb.sqlite"
-    note = tmp_path / "linked.md"
-    note.write_text("# 元文書\n本文", encoding="utf-8")
-
-    # Ingest first so the document exists, then run the migration.
-    runner.invoke(
-        main,
-        ["--db", str(db), "ingest", str(note)],
-        obj={"llm_factory": _factory(ExtractionResult(title="元文書"))},
-    )
-
-    legacy = [
-        {
-            "content": "リンク対象タスク",
-            "source_file": str(note),
-            "status": "pending",
-            "priority": "medium",
-        }
-    ]
-    legacy_path = tmp_path / "todos.json"
-    legacy_path.write_text(json.dumps(legacy, ensure_ascii=False), encoding="utf-8")
-
-    result = runner.invoke(
-        main, ["--db", str(db), "migrate-todos", str(legacy_path)]
-    )
-    assert result.exit_code == 0, result.output
-
-    import sqlite3
-
-    with sqlite3.connect(db) as c:
-        c.row_factory = sqlite3.Row
-        row = c.execute(
-            "SELECT source_document_id FROM todos WHERE content = ?",
-            ("リンク対象タスク",),
-        ).fetchone()
-    assert row["source_document_id"] is not None
-
-
-def test_migrate_todos_rejects_non_array_json(
-    runner: CliRunner, tmp_path: Path
-) -> None:
-    db = tmp_path / "docdb.sqlite"
-    f = tmp_path / "todos.json"
-    f.write_text('{"not": "a list"}', encoding="utf-8")
-    result = runner.invoke(main, ["--db", str(db), "migrate-todos", str(f)])
-    assert result.exit_code != 0
-    assert "does not contain a JSON array" in result.output

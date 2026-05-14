@@ -12,7 +12,7 @@ import sqlite3
 from typing import Iterable
 
 from docdb.ingestion.store import pack_embedding
-from docdb.models import Citation, Document, Entity
+from docdb.models import Citation, Document, Entity, Relation
 
 
 def _row_to_document(row: sqlite3.Row) -> Document:
@@ -45,24 +45,42 @@ def _row_to_entity(row: sqlite3.Row) -> Entity:
     import json as _json
 
     aliases: list[str] = []
-    metadata: dict = {}
+    fields: dict = {}
     if row["aliases"]:
         try:
             aliases = _json.loads(row["aliases"])
         except (ValueError, TypeError):
             aliases = []
-    if row["metadata"]:
+    if row["fields"]:
         try:
-            metadata = _json.loads(row["metadata"])
+            fields = _json.loads(row["fields"])
         except (ValueError, TypeError):
-            metadata = {}
+            fields = {}
     return Entity(
         id=row["id"],
+        type_slug=row["type_slug"],
         canonical_name=row["canonical_name"],
-        entity_type=row["entity_type"],
         aliases=aliases,
         description=row["description"],
-        metadata=metadata,
+        fields=fields,
+    )
+
+
+def _row_to_relation(row: sqlite3.Row) -> Relation:
+    import json as _json
+
+    fields: dict = {}
+    if row["fields"]:
+        try:
+            fields = _json.loads(row["fields"])
+        except (ValueError, TypeError):
+            fields = {}
+    return Relation(
+        id=row["id"],
+        type_slug=row["type_slug"],
+        source_entity_id=row["source_entity_id"],
+        target_entity_id=row["target_entity_id"],
+        fields=fields,
     )
 
 
@@ -228,26 +246,34 @@ def find_similar(
 
 
 # ---------------------------------------------------------------------------
-# Entities
+# Entities (property-graph nodes)
 # ---------------------------------------------------------------------------
 def search_entities(
     conn: sqlite3.Connection,
     name_partial: str,
     *,
-    entity_type: str | None = None,
+    type_slug: str | None = None,
     top_k: int = 10,
 ) -> list[Entity]:
-    sql = (
-        "SELECT * FROM entities WHERE canonical_name LIKE ? "
-    )
+    """Substring search over canonical_name, optionally filtered by type_slug.
+
+    Callers wanting trigram FTS over name + aliases + field values should
+    use the dedicated entities_fts virtual table directly.
+    """
+    sql = "SELECT * FROM entities WHERE canonical_name LIKE ? "
     params: list = [f"%{name_partial}%"]
-    if entity_type is not None:
-        sql += "AND entity_type = ? "
-        params.append(entity_type)
+    if type_slug is not None:
+        sql += "AND type_slug = ? "
+        params.append(type_slug)
     sql += "ORDER BY canonical_name LIMIT ?"
     params.append(int(top_k))
     rows = conn.execute(sql, params).fetchall()
     return [_row_to_entity(r) for r in rows]
+
+
+def get_entity(conn: sqlite3.Connection, entity_id: str) -> Entity | None:
+    row = conn.execute("SELECT * FROM entities WHERE id = ?", (entity_id,)).fetchone()
+    return _row_to_entity(row) if row else None
 
 
 def get_entity_documents(
@@ -261,6 +287,34 @@ def get_entity_documents(
         (entity_id, top_k),
     ).fetchall()
     return [_row_to_document(r) for r in rows]
+
+
+# ---------------------------------------------------------------------------
+# Relations (property-graph edges)
+# ---------------------------------------------------------------------------
+def search_relations(
+    conn: sqlite3.Connection,
+    *,
+    source_entity_id: str | None = None,
+    target_entity_id: str | None = None,
+    type_slug: str | None = None,
+    top_k: int = 50,
+) -> list[Relation]:
+    sql = "SELECT * FROM relations WHERE 1=1"
+    params: list = []
+    if source_entity_id is not None:
+        sql += " AND source_entity_id = ?"
+        params.append(source_entity_id)
+    if target_entity_id is not None:
+        sql += " AND target_entity_id = ?"
+        params.append(target_entity_id)
+    if type_slug is not None:
+        sql += " AND type_slug = ?"
+        params.append(type_slug)
+    sql += " ORDER BY created_ts DESC LIMIT ?"
+    params.append(int(top_k))
+    rows = conn.execute(sql, params).fetchall()
+    return [_row_to_relation(r) for r in rows]
 
 
 # ---------------------------------------------------------------------------

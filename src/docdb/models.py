@@ -2,16 +2,24 @@
 
 Two flavours coexist here:
 
-1. Storage-shape models (``Document``, ``Entity``, ``Tag``, ``Todo``,
+1. Storage-shape models (``Document``, ``Entity``, ``Relation``, ``Tag``,
    ``Citation``) — what code that reads from SQLite returns.
 2. Extraction-shape models (``Extracted*``, ``ExtractionResult``) — what
    the LLM is asked to produce. These define the JSON schema that
    instructor uses for structured outputs and are also re-used by tests
    via ``FakeLLM``.
 
-Identifiers are deterministic where useful: document IDs and todo IDs
-are derived from a content hash so that re-ingesting the same source
-does not duplicate rows.
+Identifiers are deterministic where useful: document IDs and entity IDs are
+derived from a content / (type, name) hash so that re-ingesting the same
+source does not duplicate rows.
+
+NOTE: Stage 2 of the property-graph redesign dropped the dedicated
+``Todo`` model, the fixed ``EntityType`` / ``TodoStatus`` / ``Priority``
+literals, and the related ``Extracted*`` shapes. Stage 3 will rebuild the
+LLM extraction layer using ``docdb.typing.field_spec.build_dynamic_model``.
+The legacy ``ExtractionResult`` is therefore a temporary shape with no
+entities / todos field — the ingestion pipeline currently skips entity and
+relation writes when ``Settings.extraction_legacy_skip`` is enabled.
 """
 
 from __future__ import annotations
@@ -25,10 +33,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 SourceType = Literal["md", "pdf", "docx", "pptx", "xlsx", "html", "txt"]
 DocType = Literal["memo", "meeting", "journal", "reference", "spec", "other"]
-EntityType = Literal["person", "org", "product", "tech", "place", "other"]
 Language = Literal["ja", "en", "mixed", "other"]
-TodoStatus = Literal["pending", "in_progress", "completed", "cancelled"]
-Priority = Literal["high", "medium", "low"]
 
 
 # ---------------------------------------------------------------------------
@@ -53,14 +58,33 @@ class Document(BaseModel):
 
 
 class Entity(BaseModel):
+    """Property-graph node.
+
+    ``type_slug`` is a free string slug that must exist in ``entity_types``.
+    ``fields`` is a free-form JSON object whose shape is governed by the
+    referenced entity_type's ``fields_schema`` (validated in the store layer).
+    """
+
     model_config = ConfigDict(extra="ignore")
 
     id: str
+    type_slug: str
     canonical_name: str
-    entity_type: EntityType
     aliases: list[str] = Field(default_factory=list)
     description: str | None = None
-    metadata: dict = Field(default_factory=dict)
+    fields: dict = Field(default_factory=dict)
+
+
+class Relation(BaseModel):
+    """Property-graph edge."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    id: str
+    type_slug: str
+    source_entity_id: str
+    target_entity_id: str
+    fields: dict = Field(default_factory=dict)
 
 
 class Tag(BaseModel):
@@ -70,20 +94,6 @@ class Tag(BaseModel):
     canonical_name: str
     aliases: list[str] = Field(default_factory=list)
     category: str | None = None
-
-
-class Todo(BaseModel):
-    model_config = ConfigDict(extra="ignore")
-
-    id: str
-    content: str
-    status: TodoStatus = "pending"
-    priority: Priority = "medium"
-    due_date: str | None = None
-    source_document_id: str | None = None
-    source_section: str | None = None
-    created_at: str | None = None
-    updated_at: str | None = None
 
 
 class Citation(BaseModel):
@@ -102,28 +112,16 @@ class Citation(BaseModel):
 # ---------------------------------------------------------------------------
 # Extraction-shape models (LLM structured-output schemas)
 # ---------------------------------------------------------------------------
-class ExtractedEntity(BaseModel):
-    name: str = Field(min_length=1)
-    entity_type: EntityType
-    aliases: list[str] = Field(default_factory=list)
-
-
-class ExtractedTodo(BaseModel):
-    content: str = Field(min_length=1)
-    priority: Priority = "medium"
-    due_date: str | None = None
-
-
+# Stage 2 leaves only the doc-level header here. Stage 3 will add a dynamic
+# ``entities`` / ``relations`` envelope built from the type registry.
 class ExtractionResult(BaseModel):
-    """Single LLM call output for a whole document."""
+    """LLM call output for a whole document (header only, post-Stage-2)."""
 
     doc_type: DocType = "other"
     title: str = ""
     summary: str = Field(default="", max_length=600)
     language: Language = "ja"
-    entities: list[ExtractedEntity] = Field(default_factory=list)
     tags: list[str] = Field(default_factory=list)
-    todos: list[ExtractedTodo] = Field(default_factory=list)
 
 
 # ---------------------------------------------------------------------------
@@ -139,15 +137,16 @@ def content_hash_for(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
-def todo_id_for(source_document_id: str | None, content: str) -> str:
-    src = source_document_id or "__free__"
-    digest = hashlib.sha256(f"{src}\x1f{content}".encode("utf-8")).hexdigest()
-    return f"todo-{digest[:12]}"
-
-
-def entity_id_for(canonical_name: str, entity_type: str) -> str:
-    digest = hashlib.sha256(f"{entity_type}\x1f{canonical_name}".encode("utf-8")).hexdigest()
+def entity_id_for(type_slug: str, canonical_name: str) -> str:
+    digest = hashlib.sha256(f"{type_slug}\x1f{canonical_name}".encode("utf-8")).hexdigest()
     return f"ent-{digest[:12]}"
+
+
+def relation_id_for(type_slug: str, source_entity_id: str, target_entity_id: str) -> str:
+    digest = hashlib.sha256(
+        f"{type_slug}\x1f{source_entity_id}\x1f{target_entity_id}".encode("utf-8")
+    ).hexdigest()
+    return f"rel-{digest[:12]}"
 
 
 def tag_id_for(canonical_name: str) -> str:

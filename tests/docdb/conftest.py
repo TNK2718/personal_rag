@@ -12,7 +12,6 @@ from tests.docdb.fixtures import (
     SAMPLE_DOCS,
     SAMPLE_ENTITIES,
     SAMPLE_TAGS,
-    SAMPLE_TODOS,
 )
 
 
@@ -54,8 +53,6 @@ def populated_db(db_path: Path, fake_llm: FakeLLM):
         store.upsert_entity(ent)
     for tag in SAMPLE_TAGS:
         store.upsert_tag(tag)
-    for todo in SAMPLE_TODOS:
-        store.upsert_todo(todo)
     # Link the meeting doc to the 田中 entity and the python tag.
     store.link_document_entity(SAMPLE_DOCS[1].id, SAMPLE_ENTITIES[0].id)
     store.link_document_tag(SAMPLE_DOCS[2].id, SAMPLE_TAGS[1].id)

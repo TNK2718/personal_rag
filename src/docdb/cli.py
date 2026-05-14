@@ -10,7 +10,6 @@ Subcommands:
     docdb ingest-dir <DIR> [--glob ...]
     docdb stats
     docdb search <QUERY> [--top-k] [--doc-type]
-    docdb migrate-todos <legacy todos.json>
 """
 
 from __future__ import annotations
@@ -31,7 +30,6 @@ from docdb.ingestion import (
 )
 from docdb.llm.base import LLMProtocol
 from docdb.llm.client import LLM
-from docdb.models import Todo, now_iso, todo_id_for
 from docdb.schema.connection import connection, init_db
 from docdb.search.direct import (
     count_documents,
@@ -99,12 +97,10 @@ def _print_report(report: IngestionReport) -> None:
         "error": "!",
     }[report.status]
     extra = []
-    if report.todos_added:
-        extra.append(f"todos={report.todos_added}")
-    if report.entities_added:
-        extra.append(f"entities={report.entities_added}")
     if report.tags_added:
         extra.append(f"tags={report.tags_added}")
+    for slug, count in (report.entities_added_by_type or {}).items():
+        extra.append(f"{slug}={count}")
     suffix = f"  [{', '.join(extra)}]" if extra else ""
     line = f"{badge} {report.status:<8} {report.source_path}{suffix}"
     click.echo(line)
@@ -173,16 +169,23 @@ def stats(ctx: click.Context) -> None:
     with connection(settings.db_path, readonly=True) as conn:
         total = count_documents(conn)
         breakdown = list_doc_types(conn)
-        todos = conn.execute("SELECT COUNT(*) AS n FROM todos").fetchone()["n"]
-        entities = conn.execute("SELECT COUNT(*) AS n FROM entities").fetchone()["n"]
+        by_type = conn.execute(
+            "SELECT type_slug, COUNT(*) AS n FROM entities "
+            "GROUP BY type_slug ORDER BY n DESC, type_slug"
+        ).fetchall()
+        relations = conn.execute("SELECT COUNT(*) AS n FROM relations").fetchone()["n"]
         tags = conn.execute("SELECT COUNT(*) AS n FROM tags").fetchone()["n"]
 
     click.echo(f"documents: {total}")
     for name, n in breakdown:
         click.echo(f"  {name}: {n}")
-    click.echo(f"entities:  {entities}")
-    click.echo(f"tags:      {tags}")
-    click.echo(f"todos:     {todos}")
+    click.echo("entities:")
+    if not by_type:
+        click.echo("  (none)")
+    for r in by_type:
+        click.echo(f"  {r['type_slug']}: {int(r['n'])}")
+    click.echo(f"relations: {int(relations)}")
+    click.echo(f"tags:      {int(tags)}")
 
 
 @main.command()
@@ -257,75 +260,6 @@ def ask(
             click.echo(f"  [{t.iteration}] {badge} {t.tool}({args_repr})")
             if t.error:
                 click.echo(f"      error: {t.error}")
-
-
-# ---------------------------------------------------------------------------
-# todos.json migration
-# ---------------------------------------------------------------------------
-@main.command("migrate-todos")
-@click.argument("path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
-@click.pass_context
-def migrate_todos(ctx: click.Context, path: Path) -> None:
-    """Import a legacy todos.json (TodoItem[]) into the DB."""
-    settings: Settings = ctx.obj["settings"]
-    init_db(settings.db_path)
-    items = json.loads(path.read_text(encoding="utf-8"))
-    if not isinstance(items, list):
-        raise click.BadParameter(f"{path} does not contain a JSON array")
-
-    imported = 0
-    skipped = 0
-    with connection(settings.db_path) as conn:
-        store = DocumentStore(conn)
-        for item in items:
-            try:
-                todo = _legacy_to_todo(item, conn)
-            except _SkipLegacy as exc:
-                click.echo(f"  skip: {exc}", err=True)
-                skipped += 1
-                continue
-            store.upsert_todo(todo)
-            imported += 1
-
-    click.echo(f"imported={imported} skipped={skipped}")
-
-
-class _SkipLegacy(RuntimeError):
-    pass
-
-
-def _legacy_to_todo(item: dict, conn) -> Todo:
-    content = (item.get("content") or "").strip()
-    if not content:
-        raise _SkipLegacy("empty content")
-    status = item.get("status") or "pending"
-    if status not in {"pending", "in_progress", "completed", "cancelled"}:
-        status = "pending"
-    priority = item.get("priority") or "medium"
-    if priority not in {"high", "medium", "low"}:
-        priority = "medium"
-
-    source_file = item.get("source_file") or item.get("source_path")
-    source_document_id = None
-    if source_file:
-        row = conn.execute(
-            "SELECT id FROM documents WHERE source_path = ?", (source_file,)
-        ).fetchone()
-        if row is not None:
-            source_document_id = row["id"]
-
-    timestamp = now_iso()
-    return Todo(
-        id=todo_id_for(source_document_id, content),
-        content=content,
-        status=status,
-        priority=priority,
-        due_date=item.get("due_date"),
-        source_document_id=source_document_id,
-        source_section=item.get("source_section"),
-        created_at=item.get("created_at") or timestamp,
-        updated_at=item.get("updated_at") or timestamp,
-    )
 
 
 if __name__ == "__main__":  # pragma: no cover

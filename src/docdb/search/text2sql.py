@@ -32,11 +32,16 @@ ALLOWED_TABLES: set[str] = {
     "documents",
     "documents_fts",
     "entities",
+    "entity_types",
+    "entities_search",
+    "entities_fts",
+    "relations",
+    "relation_types",
     "tags",
     "document_entities",
     "document_tags",
     "document_relations",
-    "todos",
+    "document_relation_mentions",
 }
 
 

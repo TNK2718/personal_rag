@@ -3,20 +3,13 @@ import { Link } from "react-router-dom";
 import { fetcher } from "../api/client";
 import type {
   DocumentListResponse,
+  EntityRef,
   Stats,
-  Todo,
 } from "../api/types";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
 import Badge from "../components/Badge";
 import styles from "./Dashboard.module.css";
-
-const STATUS_TONE = {
-  pending: "warning",
-  in_progress: "accent",
-  completed: "success",
-  cancelled: "muted",
-} as const;
 
 export default function Dashboard() {
   const { data: stats } = useSWR<Stats>("/api/stats", fetcher);
@@ -24,8 +17,8 @@ export default function Dashboard() {
     "/api/documents?limit=5",
     fetcher,
   );
-  const { data: todos } = useSWR<Todo[]>(
-    "/api/todos?status=pending&limit=5",
+  const { data: tasks } = useSWR<EntityRef[]>(
+    "/api/entities?type_slug=task&top_k=5",
     fetcher,
   );
 
@@ -35,8 +28,8 @@ export default function Dashboard() {
 
       <section className={styles.cards}>
         <Card label="Documents" value={stats?.documents_total} />
-        <Card label="Todos" value={stats?.todos_total} />
         <Card label="Entities" value={stats?.entities_total} />
+        <Card label="Relations" value={stats?.relations_total} />
         <Card label="Tags" value={stats?.tags_total} />
       </section>
 
@@ -69,6 +62,23 @@ export default function Dashboard() {
           )}
         </Panel>
 
+        <Panel title="Entity types">
+          {stats?.entities_by_type?.length ? (
+            <ul className={styles.list}>
+              {stats.entities_by_type.map((row) => (
+                <li key={row.type_slug}>
+                  <Link to={`/entities?type=${row.type_slug}`}>
+                    {row.label || row.type_slug}
+                  </Link>
+                  <span className={styles.meta}>{row.count}</span>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <EmptyState title="No entities yet" />
+          )}
+        </Panel>
+
         <Panel title="Recent documents">
           {docs?.items?.length ? (
             <ul className={styles.list}>
@@ -87,21 +97,21 @@ export default function Dashboard() {
           )}
         </Panel>
 
-        <Panel title="Pending todos">
-          {todos?.length ? (
+        <Panel title="Tasks">
+          {tasks?.length ? (
             <ul className={styles.list}>
-              {todos.map((t) => (
-                <li key={t.id}>
-                  <Badge tone={STATUS_TONE[t.status]}>{t.status}</Badge>
-                  <span style={{ marginLeft: 8 }}>{t.content}</span>
-                  {t.due_date && (
-                    <span className={styles.meta}>{t.due_date}</span>
-                  )}
-                </li>
-              ))}
+              {tasks.map((t) => {
+                const status = (t.fields?.status as string | undefined) ?? "pending";
+                return (
+                  <li key={t.id}>
+                    <Badge tone="muted">{status}</Badge>
+                    <span style={{ marginLeft: 8 }}>{t.canonical_name}</span>
+                  </li>
+                );
+              })}
             </ul>
           ) : (
-            <EmptyState title="No pending todos" />
+            <EmptyState title="No task entities" description="Settings から型を確認" />
           )}
         </Panel>
       </section>

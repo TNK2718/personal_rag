@@ -1,24 +1,39 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import useSWR from "swr";
-import { Link } from "react-router-dom";
+import { Link, useSearchParams } from "react-router-dom";
 import { fetcher } from "../api/client";
-import type { DocumentDetail, EntityRef, EntityType } from "../api/types";
+import type {
+  DocumentDetail,
+  EntityRef,
+  EntityTypeDef,
+} from "../api/types";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
 import Badge from "../components/Badge";
 import styles from "./Entities.module.css";
 
-const TYPES: EntityType[] = ["person", "org", "product", "tech", "place", "other"];
-
 export default function Entities() {
+  const [searchParams, setSearchParams] = useSearchParams();
   const [q, setQ] = useState("");
-  const [type, setType] = useState<string>("");
+  const [typeSlug, setTypeSlug] = useState<string>(searchParams.get("type") || "");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+
+  // Sync the type filter back to the URL so /entities?type=task is shareable.
+  useEffect(() => {
+    if (typeSlug) {
+      setSearchParams({ type: typeSlug }, { replace: true });
+    } else if (searchParams.has("type")) {
+      setSearchParams({}, { replace: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typeSlug]);
+
+  const { data: types } = useSWR<EntityTypeDef[]>("/api/types/entities", fetcher);
 
   const params = new URLSearchParams();
   params.set("top_k", "100");
   if (q.trim()) params.set("q", q.trim());
-  if (type) params.set("entity_type", type);
+  if (typeSlug) params.set("type_slug", typeSlug);
 
   const { data: entities } = useSWR<EntityRef[]>(
     `/api/entities?${params.toString()}`,
@@ -46,13 +61,13 @@ export default function Entities() {
         />
         <select
           className={styles.select}
-          value={type}
-          onChange={(e) => setType(e.target.value)}
+          value={typeSlug}
+          onChange={(e) => setTypeSlug(e.target.value)}
         >
           <option value="">All types</option>
-          {TYPES.map((t) => (
-            <option key={t} value={t}>
-              {t}
+          {types?.map((t) => (
+            <option key={t.slug} value={t.slug}>
+              {t.label} ({t.slug})
             </option>
           ))}
         </select>
@@ -71,7 +86,7 @@ export default function Entities() {
             >
               <div className={styles.itemHead}>
                 <span className={styles.itemName}>{e.canonical_name}</span>
-                <Badge tone="muted">{e.entity_type}</Badge>
+                <Badge tone="muted">{e.type_slug}</Badge>
               </div>
               {!!e.mention_total && (
                 <div className={styles.itemMeta}>
@@ -89,12 +104,21 @@ export default function Entities() {
             <>
               <h2 className={styles.detailTitle}>
                 {selected.canonical_name}{" "}
-                <Badge tone="muted">{selected.entity_type}</Badge>
+                <Badge tone="muted">{selected.type_slug}</Badge>
               </h2>
               {selected.aliases.length > 0 && (
                 <div className={styles.aliases}>
                   aliases: {selected.aliases.join(", ")}
                 </div>
+              )}
+              {selected.fields && Object.keys(selected.fields).length > 0 && (
+                <dl className={styles.aliases}>
+                  {Object.entries(selected.fields).map(([k, v]) => (
+                    <div key={k}>
+                      <strong>{k}:</strong> {String(v ?? "")}
+                    </div>
+                  ))}
+                </dl>
               )}
               <h3 className={styles.docsHeader}>Mentioned in</h3>
               {!docs ? (

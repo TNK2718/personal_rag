@@ -3,6 +3,12 @@
 DocumentStore is the only writer in the system. Everything else reads.
 Each public method runs inside a transaction so partial state (e.g. a
 document row without its embedding) cannot be observed.
+
+Property-graph note: ``upsert_entity`` validates the entity's ``fields``
+payload against the registered ``entity_types.fields_schema`` before
+writing and also rewrites the ``entities_search`` shadow row so the
+trigram FTS over name + aliases + description + string-typed field
+values stays in sync. Direct SQL writers MUST go through this helper.
 """
 
 from __future__ import annotations
@@ -15,10 +21,12 @@ from typing import Iterable
 from docdb.models import (
     Document,
     Entity,
+    Relation,
     Tag,
-    Todo,
     now_iso,
 )
+from docdb.typing.field_spec import validate_fields
+from docdb.typing.registry import get_entity_type, get_relation_type
 
 
 def pack_embedding(vec: Iterable[float]) -> bytes:
@@ -108,33 +116,122 @@ class DocumentStore:
         return len(rows)
 
     # ------------------------------------------------------------------
-    # Entities / tags / links
+    # Entities (property-graph nodes)
     # ------------------------------------------------------------------
     def upsert_entity(
         self, entity: Entity, *, embedding: list[float] | None = None
     ) -> None:
+        """Insert or update a typed entity.
+
+        Validates ``entity.fields`` against the registered type's
+        ``fields_schema`` and refreshes the FTS-fed shadow row.
+        """
+        type_def = get_entity_type(self.conn, entity.type_slug)
+        if type_def is None:
+            raise ValueError(
+                f"unknown entity type_slug: {entity.type_slug!r}. "
+                f"Define it via POST /api/types/entities first."
+            )
+        validated_fields = validate_fields(type_def.fields, dict(entity.fields or {}))
+
+        now = now_iso()
         with self.conn:
             self.conn.execute(
                 """
-                INSERT INTO entities (id, canonical_name, entity_type, aliases, description, metadata)
-                VALUES (?,?,?,?,?,?)
-                ON CONFLICT(canonical_name, entity_type) DO UPDATE SET
+                INSERT INTO entities (id, type_slug, canonical_name, aliases, description,
+                                      fields, created_ts, updated_ts)
+                VALUES (?,?,?,?,?,?,?,?)
+                ON CONFLICT(type_slug, canonical_name) DO UPDATE SET
                     aliases     = excluded.aliases,
                     description = excluded.description,
-                    metadata    = excluded.metadata
+                    fields      = excluded.fields,
+                    updated_ts  = excluded.updated_ts
                 """,
                 (
                     entity.id,
+                    entity.type_slug,
                     entity.canonical_name,
-                    entity.entity_type,
                     json.dumps(entity.aliases, ensure_ascii=False),
                     entity.description,
-                    json.dumps(entity.metadata or {}, ensure_ascii=False),
+                    json.dumps(validated_fields, ensure_ascii=False),
+                    now,
+                    now,
                 ),
+            )
+            self._refresh_entity_searchable_text(
+                entity.id, entity.canonical_name, entity.aliases, entity.description,
+                validated_fields,
             )
             if embedding is not None:
                 self._upsert_vec("entities_vec", "entity_id", entity.id, embedding)
 
+    def delete_entity(self, entity_id: str) -> bool:
+        with self.conn:
+            cur = self.conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))
+            self.conn.execute(
+                "DELETE FROM entities_vec WHERE entity_id = ?", (entity_id,)
+            )
+        return cur.rowcount > 0
+
+    # ------------------------------------------------------------------
+    # Relations (property-graph edges)
+    # ------------------------------------------------------------------
+    def upsert_relation(self, relation: Relation) -> None:
+        type_def = get_relation_type(self.conn, relation.type_slug)
+        if type_def is None:
+            raise ValueError(
+                f"unknown relation type_slug: {relation.type_slug!r}. "
+                f"Define it via POST /api/types/relations first."
+            )
+        validated_fields = validate_fields(type_def.fields, dict(relation.fields or {}))
+        now = now_iso()
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO relations (id, type_slug, source_entity_id, target_entity_id,
+                                       fields, created_ts, updated_ts)
+                VALUES (?,?,?,?,?,?,?)
+                ON CONFLICT(type_slug, source_entity_id, target_entity_id) DO UPDATE SET
+                    fields     = excluded.fields,
+                    updated_ts = excluded.updated_ts
+                """,
+                (
+                    relation.id,
+                    relation.type_slug,
+                    relation.source_entity_id,
+                    relation.target_entity_id,
+                    json.dumps(validated_fields, ensure_ascii=False),
+                    now,
+                    now,
+                ),
+            )
+
+    def delete_relation(self, relation_id: str) -> bool:
+        with self.conn:
+            cur = self.conn.execute("DELETE FROM relations WHERE id = ?", (relation_id,))
+        return cur.rowcount > 0
+
+    def link_document_relation(
+        self,
+        document_id: str,
+        relation_id: str,
+        *,
+        contexts: list[str] | None = None,
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO document_relation_mentions (document_id, relation_id, contexts)
+                VALUES (?,?,?)
+                ON CONFLICT(document_id, relation_id) DO UPDATE SET
+                    contexts = excluded.contexts
+                """,
+                (document_id, relation_id, json.dumps(contexts or [], ensure_ascii=False)),
+            )
+
+    # ------------------------------------------------------------------
+    # Tags
+    # ------------------------------------------------------------------
     def upsert_tag(self, tag: Tag, *, embedding: list[float] | None = None) -> None:
         with self.conn:
             self.conn.execute(
@@ -201,43 +298,36 @@ class DocumentStore:
             )
 
     # ------------------------------------------------------------------
-    # Todos
+    # Internal: searchable_text shadow + vector upsert
     # ------------------------------------------------------------------
-    def upsert_todo(self, todo: Todo) -> None:
-        now = now_iso()
-        with self.conn:
-            self.conn.execute(
-                """
-                INSERT INTO todos (
-                    id, content, status, priority, due_date,
-                    source_document_id, source_section, created_at, updated_at
-                )
-                VALUES (?,?,?,?,?,?,?,?,?)
-                ON CONFLICT(id) DO UPDATE SET
-                    content            = excluded.content,
-                    status             = excluded.status,
-                    priority           = excluded.priority,
-                    due_date           = excluded.due_date,
-                    source_document_id = excluded.source_document_id,
-                    source_section     = excluded.source_section,
-                    updated_at         = excluded.updated_at
-                """,
-                (
-                    todo.id,
-                    todo.content,
-                    todo.status,
-                    todo.priority,
-                    todo.due_date,
-                    todo.source_document_id,
-                    todo.source_section,
-                    todo.created_at or now,
-                    now,
-                ),
-            )
+    def _refresh_entity_searchable_text(
+        self,
+        entity_id: str,
+        canonical_name: str,
+        aliases: list[str],
+        description: str | None,
+        fields: dict,
+    ) -> None:
+        # Concatenate every string-valued field so FTS catches mentions
+        # of, e.g., `task.status = pending`.
+        parts: list[str] = [canonical_name]
+        parts.extend(aliases or [])
+        if description:
+            parts.append(description)
+        for value in (fields or {}).values():
+            if isinstance(value, str) and value:
+                parts.append(value)
+        searchable = " ".join(parts)
+        self.conn.execute(
+            """
+            INSERT INTO entities_search (entity_id, searchable_text)
+            VALUES (?, ?)
+            ON CONFLICT(entity_id) DO UPDATE SET
+                searchable_text = excluded.searchable_text
+            """,
+            (entity_id, searchable),
+        )
 
-    # ------------------------------------------------------------------
-    # Internal: vector upsert
-    # ------------------------------------------------------------------
     def _upsert_vec(
         self,
         table: str,

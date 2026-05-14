@@ -12,13 +12,10 @@ from docdb.models import (
     Document,
     Entity,
     Tag,
-    Todo,
     content_hash_for,
     document_id_for,
     entity_id_for,
-    now_iso,
     tag_id_for,
-    todo_id_for,
 )
 
 
@@ -85,22 +82,25 @@ SAMPLE_DOCS: list[Document] = [
 ]
 
 
+# Property-graph entities — the seed types ``person`` / ``org`` / ``task``
+# are loaded by ``init_db`` from ``seed.sql`` and referenced here by slug.
 SAMPLE_ENTITIES: list[Entity] = [
     Entity(
-        id=entity_id_for("田中", "person"),
+        id=entity_id_for("person", "田中"),
+        type_slug="person",
         canonical_name="田中",
-        entity_type="person",
         aliases=["田中さん"],
     ),
     Entity(
-        id=entity_id_for("プロジェクトA", "product"),
+        id=entity_id_for("org", "プロジェクトA"),
+        type_slug="org",
         canonical_name="プロジェクトA",
-        entity_type="product",
     ),
     Entity(
-        id=entity_id_for("Python", "tech"),
-        canonical_name="Python",
-        entity_type="tech",
+        id=entity_id_for("task", "設計レビュー実施"),
+        type_slug="task",
+        canonical_name="設計レビュー実施",
+        fields={"status": "pending", "priority": "high"},
     ),
 ]
 
@@ -108,15 +108,4 @@ SAMPLE_ENTITIES: list[Entity] = [
 SAMPLE_TAGS: list[Tag] = [
     Tag(id=tag_id_for("契約"), canonical_name="契約", category="business"),
     Tag(id=tag_id_for("python"), canonical_name="python", category="tech"),
-]
-
-
-SAMPLE_TODOS: list[Todo] = [
-    Todo(
-        id=todo_id_for(SAMPLE_DOCS[1].id, "設計レビュー実施"),
-        content="設計レビュー実施",
-        priority="high",
-        source_document_id=SAMPLE_DOCS[1].id,
-        created_at=now_iso(),
-    ),
 ]

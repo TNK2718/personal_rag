@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from docdb.llm.fake import StubChatCompletion, StubToolCall
-from tests.docdb.fixtures import SAMPLE_DOCS, SAMPLE_ENTITIES, SAMPLE_TODOS
+from tests.docdb.fixtures import SAMPLE_DOCS, SAMPLE_ENTITIES
 
 
 def test_health(client):
@@ -21,7 +21,11 @@ def test_stats(client):
     body = res.get_json()
     assert body["documents_total"] == len(SAMPLE_DOCS)
     assert body["entities_total"] == len(SAMPLE_ENTITIES)
-    assert body["todos_total"] == len(SAMPLE_TODOS)
+    # Stage 2 reports entities_by_type instead of todos_by_status; the
+    # seeded entities span person + org + task.
+    type_counts = {row["type_slug"]: row["count"] for row in body["entities_by_type"]}
+    assert type_counts == {"person": 1, "org": 1, "task": 1}
+    assert body["relations_total"] == 0
     doc_type_names = {d["doc_type"] for d in body["doc_types"]}
     assert "memo" in doc_type_names and "meeting" in doc_type_names
 
@@ -66,9 +70,10 @@ def test_document_detail(client):
     body = res.get_json()
     assert body["id"] == doc_id
     assert body["title"] == SAMPLE_DOCS[1].title
-    assert isinstance(body["todos"], list)
     assert isinstance(body["entities"], list)
+    # The server conftest links this document to SAMPLE_ENTITIES[1] = プロジェクトA.
     assert any(e["canonical_name"] == "プロジェクトA" for e in body["entities"])
+    assert "todos" not in body
 
 
 def test_document_detail_not_found(client):
@@ -93,40 +98,84 @@ def test_list_entities(client):
 
 
 def test_entity_documents(client):
-    ent_id = SAMPLE_ENTITIES[1].id  # プロジェクトA
+    # The server conftest links プロジェクトA (entities[1]) to docs[1].
+    ent_id = SAMPLE_ENTITIES[1].id
     res = client.get(f"/api/entities/{ent_id}/documents")
     assert res.status_code == 200
     docs = res.get_json()
     assert any(d["id"] == SAMPLE_DOCS[1].id for d in docs)
 
 
-def test_list_todos(client):
-    res = client.get("/api/todos")
-    assert res.status_code == 200
-    items = res.get_json()
-    assert len(items) == len(SAMPLE_TODOS)
-    assert items[0]["status"] in {"pending", "in_progress", "completed", "cancelled"}
-
-
-def test_patch_todo_status(client):
-    todo_id = SAMPLE_TODOS[0].id
-    res = client.patch(f"/api/todos/{todo_id}", json={"status": "in_progress"})
-    assert res.status_code == 200
-    body = res.get_json()
-    assert body["status"] == "in_progress"
-
-    after = client.get("/api/todos").get_json()
-    assert any(t["id"] == todo_id and t["status"] == "in_progress" for t in after)
-
-
-def test_patch_todo_invalid_status(client):
-    res = client.patch(f"/api/todos/{SAMPLE_TODOS[0].id}", json={"status": "bogus"})
+# ---------------------------------------------------------------------------
+# Property-graph CRUD (Stage 2)
+# ---------------------------------------------------------------------------
+def test_create_entity_validates_fields(client):
+    # Invalid status value for the seed `task` type must be rejected.
+    res = client.post(
+        "/api/entities",
+        json={
+            "type_slug": "task",
+            "canonical_name": "design review",
+            "fields": {"status": "definitely_not_a_status", "priority": "medium"},
+        },
+    )
     assert res.status_code == 400
 
 
-def test_patch_todo_not_found(client):
-    res = client.patch("/api/todos/todo-doesnotexist", json={"status": "completed"})
-    assert res.status_code == 404
+def test_create_entity_then_patch_field(client):
+    res = client.post(
+        "/api/entities",
+        json={
+            "type_slug": "task",
+            "canonical_name": "ship docs",
+            "fields": {"status": "pending", "priority": "high"},
+        },
+    )
+    assert res.status_code == 201
+    created = res.get_json()
+    eid = created["id"]
+
+    res = client.patch(
+        f"/api/entities/{eid}", json={"fields": {"status": "in_progress", "priority": "high"}}
+    )
+    assert res.status_code == 200
+    assert res.get_json()["fields"]["status"] == "in_progress"
+
+
+def test_delete_user_entity(client):
+    res = client.post(
+        "/api/entities",
+        json={"type_slug": "person", "canonical_name": "新人"},
+    )
+    eid = res.get_json()["id"]
+    assert client.delete(f"/api/entities/{eid}").status_code == 204
+    assert client.get(f"/api/entities/{eid}").status_code == 404
+
+
+def test_create_relation_and_list(client):
+    src = client.post(
+        "/api/entities",
+        json={"type_slug": "task", "canonical_name": "code review",
+              "fields": {"status": "pending", "priority": "medium"}},
+    ).get_json()
+    tgt = client.post(
+        "/api/entities",
+        json={"type_slug": "person", "canonical_name": "Alice"},
+    ).get_json()
+
+    res = client.post(
+        "/api/relations",
+        json={
+            "type_slug": "assigned_to",
+            "source_entity_id": src["id"],
+            "target_entity_id": tgt["id"],
+        },
+    )
+    assert res.status_code == 201
+
+    listed = client.get(f"/api/relations?source_entity_id={src['id']}").get_json()
+    assert len(listed) == 1
+    assert listed[0]["type_slug"] == "assigned_to"
 
 
 def test_ask_endpoint(client, fake_llm):
@@ -162,7 +211,8 @@ def test_ask_empty_question(client):
 
 
 def test_ingest_file(client, tmp_path: Path, fake_llm):
-    # Pre-script extraction returns: no entities/tags/todos so the path is simple.
+    # Pre-script extraction returns the header only; entity / relation writes
+    # are intentionally disabled in Stage 2.
     from docdb.models import ExtractionResult
 
     fake_llm.extract_responses.append(

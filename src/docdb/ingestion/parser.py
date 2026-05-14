@@ -20,7 +20,6 @@ from pathlib import Path
 from typing import Iterable
 
 from docdb.models import (
-    ExtractedTodo,
     SourceType,
     content_hash_for,
 )
@@ -58,17 +57,9 @@ class ParsedDocument:
 _HEADER_RE = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _FRONTMATTER_RE = re.compile(r"\A---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
-# Regex TODO fallback. Each pattern's first capture group is the TODO body.
-# Order matters: the first match wins per line.
-_TODO_PATTERNS: tuple[re.Pattern, ...] = (
-    re.compile(r"^\s*[-*]\s+\[ \]\s+(.+?)\s*$", re.IGNORECASE),
-    re.compile(r"^\s*[-*]\s+\[x\]\s+(.+?)\s*$", re.IGNORECASE),  # marked done
-    re.compile(r"\b(?:TODO|FIXME|HACK|XXX)\s*[:：]?\s*(.+?)\s*$", re.IGNORECASE),
-)
-_DONE_PATTERN = re.compile(r"^\s*[-*]\s+\[x\]\s+", re.IGNORECASE)
-
-_HIGH_PRIORITY = ("urgent", "asap", "急", "緊急", "至急")
-_LOW_PRIORITY = ("later", "後で", "将来", "いつか")
+# Regex TODO fallback was removed in Stage 2 along with the dedicated
+# ``todos`` table. Stage 3 reinstates per-type "deterministic extractors"
+# (e.g. ``task_checkbox``) registered against user-defined entity types.
 
 
 # ---------------------------------------------------------------------------
@@ -124,35 +115,6 @@ class Parser:
             frontmatter={},
             sections=[Section(header=title, level=1, body=text)] if text.strip() else [],
         )
-
-    # -- Regex TODO fallback ----------------------------------------------
-    def extract_todos_regex(self, text: str) -> list[ExtractedTodo]:
-        """Best-effort TODO extraction without an LLM.
-
-        Used by the offline mode (``--no-llm``) and as a sanity check
-        against LLM hallucinations. Completed checkbox items are
-        skipped because the new pipeline records pending TODOs only.
-        """
-        out: list[ExtractedTodo] = []
-        for line in text.splitlines():
-            if _DONE_PATTERN.match(line):
-                continue
-            for pat in _TODO_PATTERNS:
-                match = pat.search(line)
-                if not match:
-                    continue
-                content = match.group(1).strip()
-                if not content or len(content) < 3:
-                    break
-                out.append(
-                    ExtractedTodo(
-                        content=content,
-                        priority=_infer_priority(content),
-                    )
-                )
-                break
-        return _dedup_preserving_order(out)
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -244,24 +206,3 @@ def _first_nonblank_line(text: str) -> str | None:
         if line.strip():
             return line.strip()
     return None
-
-
-def _infer_priority(content: str) -> str:
-    lower = content.lower()
-    if any(word in lower for word in _HIGH_PRIORITY):
-        return "high"
-    if any(word in lower for word in _LOW_PRIORITY):
-        return "low"
-    return "medium"
-
-
-def _dedup_preserving_order(items: list[ExtractedTodo]) -> list[ExtractedTodo]:
-    seen: set[str] = set()
-    out: list[ExtractedTodo] = []
-    for it in items:
-        key = it.content.lower()
-        if key in seen:
-            continue
-        seen.add(key)
-        out.append(it)
-    return out

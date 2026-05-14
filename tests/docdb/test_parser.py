@@ -7,10 +7,11 @@ normaliser, store) relies on these guarantees:
   (so content_hash stays stable across re-ingestion);
 * frontmatter is recognised only when the file starts with ``---``;
 * headers split the body in document order, with everything before the
-  first header preserved as a ``__preamble__`` section;
-* the regex TODO fallback finds ``- [ ]`` checkboxes and
-  ``TODO/FIXME`` markers, skips completed boxes, and infers priority
-  from urgency words.
+  first header preserved as a ``__preamble__`` section.
+
+The regex TODO fallback was moved out of this module in Stage 2. Stage 3
+brings it back as a per-type "deterministic extractor" in
+``docdb.typing.deterministic``.
 """
 
 from __future__ import annotations
@@ -157,51 +158,6 @@ def test_parse_file_handles_unknown_extension_as_text(
     f.write_text("some content", encoding="utf-8")
     doc = parser.parse_file(f)
     assert doc.source_type == "txt"
-
-
-# ---------------------------------------------------------------------------
-# Regex TODO fallback
-# ---------------------------------------------------------------------------
-def test_regex_todo_finds_checkbox_items(parser: Parser) -> None:
-    text = "- [ ] write tests\n- [ ] review PR\n"
-    todos = parser.extract_todos_regex(text)
-    assert [t.content for t in todos] == ["write tests", "review PR"]
-
-
-def test_regex_todo_skips_completed_checkboxes(parser: Parser) -> None:
-    text = "- [x] already done\n- [ ] still open\n"
-    todos = parser.extract_todos_regex(text)
-    assert [t.content for t in todos] == ["still open"]
-
-
-def test_regex_todo_finds_todo_keyword_lines(parser: Parser) -> None:
-    text = "メモ。\nTODO: 設計レビュー\nFIXME 仕様の確認\n"
-    todos = parser.extract_todos_regex(text)
-    contents = [t.content for t in todos]
-    assert "設計レビュー" in contents
-    assert "仕様の確認" in contents
-
-
-def test_regex_todo_dedupes_identical_entries(parser: Parser) -> None:
-    text = "TODO: 同じタスク\n- [ ] 同じタスク\n"
-    todos = parser.extract_todos_regex(text)
-    assert len(todos) == 1
-    assert todos[0].content == "同じタスク"
-
-
-def test_regex_todo_infers_priority_from_urgency_words(parser: Parser) -> None:
-    text = "- [ ] 緊急対応する\n- [ ] 後で読む\n- [ ] 普通のタスク\n"
-    todos = parser.extract_todos_regex(text)
-    by_content = {t.content: t.priority for t in todos}
-    assert by_content["緊急対応する"] == "high"
-    assert by_content["後で読む"] == "low"
-    assert by_content["普通のタスク"] == "medium"
-
-
-def test_regex_todo_filters_too_short_entries(parser: Parser) -> None:
-    text = "- [ ] ab\n- [ ] long enough\n"
-    todos = parser.extract_todos_regex(text)
-    assert [t.content for t in todos] == ["long enough"]
 
 
 # ---------------------------------------------------------------------------
