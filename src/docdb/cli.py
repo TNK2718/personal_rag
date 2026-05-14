@@ -143,9 +143,17 @@ def ingest_dir(ctx: click.Context, directory: Path, glob_pattern: str) -> None:
     init_db(settings.db_path)
     llm = ctx.obj["llm_factory"](settings)
     counts: dict[str, int] = {"created": 0, "updated": 0, "skipped": 0, "error": 0}
+    targets = [p for p in sorted(directory.glob(glob_pattern)) if p.is_file()]
+    total = len(targets)
+    click.echo(f"found {total} file(s) matching {glob_pattern} under {directory}")
+    if total == 0:
+        return
     with connection(settings.db_path) as conn:
         pipeline = IngestionPipeline(store=DocumentStore(conn), llm=llm)
-        for report in pipeline.ingest_directory(directory, glob=glob_pattern):
+        for i, path in enumerate(targets, 1):
+            click.echo(f"[{i}/{total}] processing {path} ...", nl=True)
+            sys.stdout.flush()
+            report = pipeline.ingest_file(path)
             _print_report(report)
             counts[report.status] = counts.get(report.status, 0) + 1
     click.echo(

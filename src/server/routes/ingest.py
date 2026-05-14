@@ -35,7 +35,7 @@ def ingest_endpoint():
     if path.is_file():
         reports = [pipeline.ingest_file(path)]
     else:
-        reports = pipeline.ingest_directory(path, glob=glob_pattern)
+        reports = list(pipeline.ingest_directory(path, glob=glob_pattern))
 
     summary: dict[str, int] = {"created": 0, "updated": 0, "skipped": 0, "error": 0}
     for r in reports:
