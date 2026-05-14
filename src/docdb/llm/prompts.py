@@ -73,3 +73,52 @@ def build_extraction_user_prompt(
     if truncated:
         parts.append(f"\n[... 末尾を {len(parsed.raw_text) - max_body_chars} 字省略 ...]")
     return "\n".join(parts)
+
+
+# ---------------------------------------------------------------------------
+# Text2SQL
+# ---------------------------------------------------------------------------
+TEXT2SQL_SYSTEM = (
+    "あなたは SQLite データベースに対する読み取り専用 SQL を生成するアシスタントです。\n"
+    "次のルールに厳密に従ってください。\n"
+    "1. 出力は単一の SELECT 文 (または WITH ... SELECT) のみ。\n"
+    "2. INSERT / UPDATE / DELETE / DROP / ALTER / PRAGMA / ATTACH は禁止。\n"
+    "3. 許可テーブルは documents / documents_fts / entities / tags / "
+    "document_entities / document_tags / document_relations / todos のみ。\n"
+    "4. 件数が多くなり得るクエリには LIMIT を付ける (既定 50 件以内)。\n"
+    "5. 日本語の全文検索は documents_fts MATCH を使う (3 文字以上必須)。\n"
+    "6. 不要な列を SELECT しない。少なくとも documents.id, title を含めると後工程が読みやすい。\n"
+    "7. 出力 JSON は {sql, reasoning} の 2 フィールドのみ。"
+)
+
+DOCDB_SCHEMA_SUMMARY = """\
+-- documents(id TEXT PK, source_path, source_uri, source_type, title, doc_type,
+--           author, created_at, summary, raw_text, content_hash UNIQUE,
+--           language, metadata JSON, created_ts, updated_ts)
+--   doc_type ∈ {memo, meeting, journal, reference, spec, other}
+--   language ∈ {ja, en, mixed, other}
+--   created_at: ISO date string (YYYY-MM-DD); may be NULL.
+-- documents_fts(title, summary, raw_text)  -- FTS5, trigram tokenizer
+--   usage: WHERE documents_fts MATCH '解約条項'
+--   join : JOIN documents d ON d.rowid = documents_fts.rowid
+-- entities(id, canonical_name, entity_type, aliases JSON, description, metadata JSON)
+--   entity_type ∈ {person, org, product, tech, place, other}
+-- tags(id, canonical_name UNIQUE, aliases JSON, category)
+-- document_entities(document_id, entity_id, mention_count, contexts JSON)
+-- document_tags(document_id, tag_id, confidence, source)
+-- document_relations(src_document_id, dst_document_id, relation_type, confidence, evidence)
+-- todos(id, content, status, priority, due_date, source_document_id,
+--       source_section, created_at, updated_at)
+--   status ∈ {pending, in_progress, completed, cancelled}
+--   priority ∈ {high, medium, low}
+"""
+
+
+def build_text2sql_user_prompt(question: str) -> str:
+    return (
+        f"{TEXT2SQL_SYSTEM}\n\n"
+        "# スキーマ\n"
+        f"{DOCDB_SCHEMA_SUMMARY}\n"
+        "# 質問\n"
+        f"{question}\n"
+    )
