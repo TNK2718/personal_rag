@@ -7,6 +7,7 @@ import DocumentDetail from "./routes/DocumentDetail";
 import Todos from "./routes/Todos";
 import Entities from "./routes/Entities";
 import Ingest from "./routes/Ingest";
+import Settings from "./routes/Settings";
 
 export default function App() {
   return (
@@ -19,6 +20,7 @@ export default function App() {
         <Route path="todos" element={<Todos />} />
         <Route path="entities" element={<Entities />} />
         <Route path="ingest" element={<Ingest />} />
+        <Route path="settings" element={<Settings />} />
       </Route>
     </Routes>
   );

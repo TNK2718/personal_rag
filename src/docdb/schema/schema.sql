@@ -1,4 +1,4 @@
--- DocDB schema v1
+-- DocDB schema v2
 -- All tables intended for the agentic search layer are defined here.
 -- Virtual tables (FTS5, sqlite-vec) require the respective extensions
 -- to be loaded on the connection before this DDL is applied.
@@ -37,7 +37,49 @@ CREATE INDEX IF NOT EXISTS idx_documents_created_at ON documents(created_at);
 CREATE INDEX IF NOT EXISTS idx_documents_source_path ON documents(source_path);
 
 -- ============================================================
--- Entities (people, orgs, products, tech, places, ...)
+-- Type registry (Stage 1 of property-graph redesign)
+-- ============================================================
+-- entity_types and relation_types are user-editable at runtime.
+-- fields_schema is a JSON FieldSpec[]; see docdb.typing.field_spec.
+-- These coexist with the legacy `entities`/`todos` tables until Stage 2.
+CREATE TABLE IF NOT EXISTS entity_types (
+    slug             TEXT PRIMARY KEY,
+    label            TEXT NOT NULL,
+    description      TEXT,
+    icon             TEXT,
+    color            TEXT,
+    fields_schema    TEXT NOT NULL DEFAULT '[]',
+    extraction_hint  TEXT,
+    is_builtin       INTEGER NOT NULL DEFAULT 0,
+    created_ts       TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_ts       TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (json_valid(fields_schema))
+);
+
+CREATE TABLE IF NOT EXISTS relation_types (
+    slug              TEXT PRIMARY KEY,
+    label             TEXT NOT NULL,
+    description       TEXT,
+    inverse_label     TEXT,
+    source_type_slug  TEXT,                     -- NULL = any
+    target_type_slug  TEXT,
+    fields_schema     TEXT NOT NULL DEFAULT '[]',
+    extraction_hint   TEXT,
+    is_builtin        INTEGER NOT NULL DEFAULT 0,
+    created_ts        TEXT NOT NULL DEFAULT (datetime('now')),
+    updated_ts        TEXT NOT NULL DEFAULT (datetime('now')),
+    CHECK (json_valid(fields_schema)),
+    FOREIGN KEY(source_type_slug) REFERENCES entity_types(slug) ON DELETE SET NULL,
+    FOREIGN KEY(target_type_slug) REFERENCES entity_types(slug) ON DELETE SET NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_relation_types_src ON relation_types(source_type_slug);
+CREATE INDEX IF NOT EXISTS idx_relation_types_dst ON relation_types(target_type_slug);
+
+-- ============================================================
+-- Entities (LEGACY — to be dropped in Stage 2)
+-- Current shape uses a fixed entity_type enum. Property-graph entities
+-- replace this table in Stage 2 once the type registry is in place.
 -- ============================================================
 CREATE TABLE IF NOT EXISTS entities (
     id              TEXT PRIMARY KEY,
@@ -181,4 +223,4 @@ CREATE VIRTUAL TABLE IF NOT EXISTS tags_vec USING vec0(
     embedding float[1024]
 );
 
-INSERT OR IGNORE INTO schema_version(version) VALUES (1);
+INSERT OR IGNORE INTO schema_version(version) VALUES (2);

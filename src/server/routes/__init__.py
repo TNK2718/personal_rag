@@ -13,6 +13,7 @@ from server.routes import (
     search,
     stats,
     todos,
+    types,
 )
 
 
@@ -22,6 +23,7 @@ def register_routes(app: Flask) -> None:
     app.register_blueprint(documents.bp)
     app.register_blueprint(entities.bp)
     app.register_blueprint(todos.bp)
+    app.register_blueprint(types.bp)
     app.register_blueprint(search.bp)
     app.register_blueprint(ask.bp)
     app.register_blueprint(ingest.bp)

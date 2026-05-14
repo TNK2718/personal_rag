@@ -1,0 +1,111 @@
+.tabs {
+  display: flex;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+  border-bottom: 1px solid var(--color-border);
+}
+
+.tab {
+  padding: var(--space-2) var(--space-3);
+  background: transparent;
+  color: var(--color-text-muted);
+  border: 0;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  font-size: 0.95rem;
+}
+
+.tab:hover {
+  color: var(--color-text);
+}
+
+.tabActive {
+  color: var(--color-text);
+  border-bottom-color: var(--color-accent);
+}
+
+.list {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.card {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.cardHead {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  justify-content: space-between;
+}
+
+.slug {
+  font-family: var(--font-mono, monospace);
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+}
+
+.label {
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+
+.description {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.fieldList {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-1);
+  margin-top: var(--space-1);
+}
+
+.fieldRow {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  font-size: 0.85rem;
+  color: var(--color-text);
+}
+
+.fieldName {
+  font-family: var(--font-mono, monospace);
+}
+
+.fieldType {
+  color: var(--color-text-muted);
+  font-style: italic;
+}
+
+.empty {
+  color: var(--color-text-muted);
+  font-size: 0.85rem;
+  font-style: italic;
+}
+
+.hint {
+  background-color: var(--color-surface-alt, var(--color-surface));
+  border-left: 3px solid var(--color-accent);
+  padding: var(--space-1) var(--space-2);
+  font-size: 0.85rem;
+  color: var(--color-text-muted);
+  line-height: 1.5;
+}
+
+.placeholder {
+  color: var(--color-text-muted);
+  font-size: 0.9rem;
+  margin-top: var(--space-3);
+  font-style: italic;
+}
