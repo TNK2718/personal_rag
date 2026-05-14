@@ -20,6 +20,8 @@ EXPECTED_TABLES = {
     "schema_version",
     "documents",
     "entities",
+    "entity_types",
+    "relation_types",
     "tags",
     "document_entities",
     "document_tags",
@@ -45,7 +47,7 @@ def test_init_db_creates_every_expected_table(conn: sqlite3.Connection) -> None:
 def test_schema_version_row_is_recorded(conn: sqlite3.Connection) -> None:
     row = conn.execute("SELECT version FROM schema_version ORDER BY version DESC LIMIT 1").fetchone()
     assert row is not None
-    assert row["version"] == 1
+    assert row["version"] == 2
 
 
 def test_init_db_is_idempotent(db_path) -> None:

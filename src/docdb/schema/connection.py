@@ -10,6 +10,7 @@ import sqlite_vec
 
 
 _SCHEMA_RESOURCE = ("docdb.schema", "schema.sql")
+_SEED_RESOURCE = ("docdb.schema", "seed.sql")
 
 
 def _load_extensions(conn: sqlite3.Connection) -> None:
@@ -46,15 +47,29 @@ def get_connection(db_path: Path | str, *, readonly: bool = False) -> sqlite3.Co
     return conn
 
 
-def _read_schema_sql() -> str:
-    package, name = _SCHEMA_RESOURCE
+def _read_resource(resource: tuple[str, str]) -> str:
+    package, name = resource
     return resources.files(package).joinpath(name).read_text(encoding="utf-8")
 
 
+def _read_schema_sql() -> str:
+    return _read_resource(_SCHEMA_RESOURCE)
+
+
+def _read_seed_sql() -> str:
+    return _read_resource(_SEED_RESOURCE)
+
+
 def init_db(db_path: Path | str) -> None:
-    """Create the database file (if missing) and apply schema.sql idempotently."""
+    """Create the database file (if missing) and apply schema + seeds idempotently.
+
+    schema.sql defines the table layout; seed.sql ships built-in type
+    definitions (person/org/place/task/...). Both use INSERT OR IGNORE
+    so re-running is safe and never clobbers user edits.
+    """
     with get_connection(db_path) as conn:
         conn.executescript(_read_schema_sql())
+        conn.executescript(_read_seed_sql())
         conn.commit()
 
 

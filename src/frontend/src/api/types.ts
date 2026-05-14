@@ -1,4 +1,53 @@
 export type DocType = "memo" | "meeting" | "journal" | "reference" | "spec" | "other";
+
+// ---------------------------------------------------------------------------
+// Type registry (Stage 1 of property-graph redesign)
+// ---------------------------------------------------------------------------
+export type FieldSpecType =
+  | "string"
+  | "text"
+  | "int"
+  | "float"
+  | "bool"
+  | "date"
+  | "datetime"
+  | "enum"
+  | "url"
+  | "ref";
+
+export interface FieldSpec {
+  name: string;
+  label: string;
+  type: FieldSpecType;
+  required?: boolean;
+  default?: unknown;
+  ui_widget?: string;
+  options?: string[];        // enum only
+  ref_type_slug?: string;    // ref only
+}
+
+interface TypeDefBase {
+  slug: string;
+  label: string;
+  description: string | null;
+  fields_schema: FieldSpec[];
+  extraction_hint: string | null;
+  is_builtin: boolean;
+  created_ts: string | null;
+  updated_ts: string | null;
+}
+
+export interface EntityTypeDef extends TypeDefBase {
+  icon: string | null;
+  color: string | null;
+}
+
+export interface RelationTypeDef extends TypeDefBase {
+  inverse_label: string | null;
+  source_type_slug: string | null;
+  target_type_slug: string | null;
+}
+
 export type TodoStatus = "pending" | "in_progress" | "completed" | "cancelled";
 export type Priority = "high" | "medium" | "low";
 export type EntityType = "person" | "org" | "product" | "tech" | "place" | "other";

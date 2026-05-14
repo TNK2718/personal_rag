@@ -8,6 +8,7 @@ const NAV = [
   { to: "/todos", label: "Todos", end: false },
   { to: "/entities", label: "Entities", end: false },
   { to: "/ingest", label: "Ingest", end: false },
+  { to: "/settings", label: "Settings", end: false },
 ];
 
 export default function Layout() {
