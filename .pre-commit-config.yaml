@@ -1,0 +1,28 @@
+repos:
+  - repo: https://github.com/gitleaks/gitleaks
+    rev: v8.21.2
+    hooks:
+      - id: gitleaks
+
+  - repo: local
+    hooks:
+      - id: check-dependency-age
+        name: uv.lock minimum package age (>=7 days)
+        entry: python3 scripts/check_dependency_age.py
+        language: system
+        files: ^uv\.lock$
+        pass_filenames: false
+
+      - id: pip-audit
+        name: pip-audit (uv.lock)
+        entry: scripts/run_pip_audit.sh
+        language: system
+        files: ^uv\.lock$
+        pass_filenames: false
+
+      - id: npm-audit
+        name: npm audit (frontend)
+        entry: bash -c 'cd src/frontend && npm audit --audit-level=high'
+        language: system
+        files: ^src/frontend/(package(-lock)?\.json|\.npmrc)$
+        pass_filenames: false
