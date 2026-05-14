@@ -28,6 +28,13 @@ class Settings(BaseSettings):
     agent_max_iters: int = Field(default=8, ge=1, le=20)
     sql_max_limit: int = Field(default=100, ge=1, le=1000)
 
+    # Stage 3 — LLM extraction tuning.
+    # Relation extraction is more error-prone than entity extraction on
+    # small Ollama models; this flag lets the user turn it off without
+    # rebuilding the type registry.
+    extract_relations: bool = True
+    extraction_prompt_max_bytes: int = Field(default=30_000, ge=2_000, le=200_000)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
