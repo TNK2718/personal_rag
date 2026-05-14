@@ -214,3 +214,7 @@ data/
 memo/
 *.tsbuildinfo
 
+# Editor / agent local state
+.claude/
+.vscode/
+
