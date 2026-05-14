@@ -7,7 +7,7 @@ def test_defaults_use_qwen3_4b_for_both_extract_and_agent() -> None:
     # opt-in via DOCDB_AGENT_MODEL.
     from docdb.config import Settings
 
-    s = Settings()
+    s = Settings(_env_file=None)
     assert s.extract_model == "qwen3:4b"
     assert s.agent_model == "qwen3:4b"
     assert s.embed_model == "bge-m3"

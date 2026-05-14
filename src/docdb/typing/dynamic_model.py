@@ -19,7 +19,7 @@ Output envelope:
         "relations": [                            // only when ≥1 relation type
             {"type": "assigned_to",
              "source": {"type": "task", "name": "..."},
-             "target": {"type": "person", "name": "..."},
+             "target": {"type": "person", "name": "..."},  // or null when unknown
              "fields": {}}
         ]
     }
@@ -66,7 +66,12 @@ class ExtractedRelationBase(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     source: ExtractedEntityRef
-    target: ExtractedEntityRef
+    # target is intentionally nullable: small LLMs honestly emit
+    # `{"target": null}` when the source text does not name a counterpart
+    # (e.g. an unassigned task). Forcing it would push models to either
+    # fabricate a target or drop the whole extraction; both are worse than
+    # letting the normaliser discard the dangling relation downstream.
+    target: ExtractedEntityRef | None = None
     fields: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -238,6 +238,43 @@ class TestNormalizerStage3:
         assert norm.relations == []
         assert any(d.kind == "unresolved_relation" for d in norm.drops)
 
+    def test_relation_with_null_target_is_accepted_then_dropped(self) -> None:
+        # Regression: small LLMs honestly emit ``target: null`` when the source
+        # text does not name a counterpart. Pydantic must accept the payload so
+        # that the rest of the extraction (entities!) survives; the normaliser
+        # then drops the dangling relation as ``unresolved_relation``.
+        Model = build_extraction_model(
+            entity_type_slugs=["person", "task"],
+            relation_type_slugs=["assigned_to"],
+            registry_hash="null-target-test",
+        )
+        payload = Model(
+            entities=[
+                {"type": "task", "name": "write spec",
+                 "fields": {"status": "pending", "priority": "medium"}},
+                {"type": "person", "name": "Tanaka"},
+            ],
+            relations=[
+                {"type": "assigned_to",
+                 "source": {"type": "task", "name": "write spec"},
+                 "target": None},
+            ],
+        )
+        # Sanity: schema accepted the null target rather than raising.
+        assert payload.relations[0].target is None
+
+        norm = normalize_extraction(
+            payload,
+            document_id="doc-1",
+            entity_type_slugs={"person", "task"},
+            relation_type_slugs={"assigned_to"},
+        )
+        # The orphan relation is dropped, but both entities survive — that is
+        # the whole point of allowing null targets at the schema layer.
+        assert norm.relations == []
+        assert any(d.kind == "unresolved_relation" for d in norm.drops)
+        assert {e.canonical_name for e in norm.entities} == {"write spec", "Tanaka"}
+
     def test_extract_relations_false_skips_relations(self) -> None:
         payload = self._make_payload(
             entities=[
