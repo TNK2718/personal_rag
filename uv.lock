@@ -2005,7 +2005,7 @@ wheels = [
 [[package]]
 name = "personal-rag"
 version = "0.2.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "apscheduler" },
     { name = "click" },

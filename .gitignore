@@ -212,3 +212,5 @@ node_modules/
 storage/
 data/
 memo/
+*.tsbuildinfo
+

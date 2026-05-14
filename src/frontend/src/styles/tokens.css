@@ -1,0 +1,28 @@
+:root {
+  --color-bg: #0f1115;
+  --color-surface: #161a21;
+  --color-surface-2: #1d222c;
+  --color-border: #2a313d;
+  --color-text: #e6e8ec;
+  --color-muted: #8a93a6;
+  --color-accent: #5b8def;
+  --color-accent-soft: #5b8def22;
+  --color-danger: #ef5b6e;
+  --color-warning: #f0a13a;
+  --color-success: #4fb96e;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --space-6: 32px;
+
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Kaku Gothic ProN",
+    "Noto Sans CJK JP", "Yu Gothic", Meiryo, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, "Menlo", "Consolas", monospace;
+}
