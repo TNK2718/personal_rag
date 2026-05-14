@@ -1,0 +1,148 @@
+.form {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  margin-bottom: var(--space-5);
+}
+
+.textarea {
+  width: 100%;
+  padding: var(--space-3);
+  background-color: var(--color-surface);
+  color: var(--color-text);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  resize: vertical;
+}
+
+.formActions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.submit {
+  padding: var(--space-2) var(--space-5);
+  background-color: var(--color-accent);
+  color: white;
+  border: 0;
+  border-radius: var(--radius-md);
+  font-weight: 600;
+}
+
+.submit:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.error {
+  padding: var(--space-3);
+  background-color: rgba(239, 91, 110, 0.12);
+  color: var(--color-danger);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
+}
+
+.warning {
+  padding: var(--space-3);
+  background-color: rgba(240, 161, 58, 0.12);
+  color: var(--color-warning);
+  border-radius: var(--radius-md);
+  margin-bottom: var(--space-3);
+}
+
+.result {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-5);
+}
+
+.h2 {
+  font-size: 14px;
+  color: var(--color-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin: 0 0 var(--space-3);
+}
+
+.answerSection {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-4);
+}
+
+.answer p:first-child {
+  margin-top: 0;
+}
+
+.answer p:last-child {
+  margin-bottom: 0;
+}
+
+.citations {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+}
+
+.citations li {
+  padding: var(--space-3);
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+}
+
+.snippet {
+  margin-top: var(--space-1);
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.traceToggle {
+  background: none;
+  border: 0;
+  color: var(--color-muted);
+  padding: var(--space-2) 0;
+}
+
+.trace {
+  list-style: none;
+  padding: 0;
+  margin: var(--space-2) 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+}
+
+.trace > li {
+  background-color: var(--color-surface);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+}
+
+.traceHeader {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: var(--space-2);
+}
+
+.traceTool {
+  font-weight: 600;
+  font-family: var(--font-mono);
+}
+
+.traceIter {
+  color: var(--color-muted);
+  font-size: 12px;
+}
+
+.traceArgs,
+.tracePreview {
+  margin: 0;
+  font-size: 12px;
+  white-space: pre-wrap;
+}
