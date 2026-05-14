@@ -22,7 +22,7 @@ from click.testing import CliRunner
 
 from docdb.cli import main
 from docdb.config import Settings
-from docdb.llm.fake import FakeLLM
+from docdb.llm.fake import FakeLLM, StubChatCompletion
 from docdb.models import ExtractedEntity, ExtractedTodo, ExtractionResult
 
 
@@ -36,6 +36,16 @@ def _factory(*results: ExtractionResult):
 
     def make(_settings: Settings) -> FakeLLM:
         return FakeLLM(extract_responses=list(queue))
+
+    return make
+
+
+def _chat_factory(*chats: StubChatCompletion):
+    """Factory for commands that only call chat_with_tools (e.g. ask)."""
+    queue = list(chats)
+
+    def make(_settings: Settings) -> FakeLLM:
+        return FakeLLM(chat_responses=list(queue))
 
     return make
 
@@ -141,6 +151,96 @@ def test_search_against_empty_db_prints_no_results_message(
     result = runner.invoke(main, ["--db", str(db), "search", "anything"])
     assert result.exit_code == 0
     assert "(no results)" in result.output
+
+
+# ---------------------------------------------------------------------------
+# ask (agent)
+# ---------------------------------------------------------------------------
+def _seed_corpus(runner: CliRunner, db: Path, note_path: Path) -> str:
+    """Ingest one document and return its document_id."""
+    note_path.write_text("# 解約条項メモ\n本契約の解約条項について\n", encoding="utf-8")
+    runner.invoke(
+        main,
+        ["--db", str(db), "ingest", str(note_path)],
+        obj={
+            "llm_factory": _factory(
+                ExtractionResult(doc_type="memo", title="解約条項メモ")
+            )
+        },
+    )
+    # Look up the resulting doc id; the CLI does not print it, so we
+    # query the DB directly.
+    import sqlite3
+
+    with sqlite3.connect(db) as c:
+        c.row_factory = sqlite3.Row
+        row = c.execute("SELECT id FROM documents LIMIT 1").fetchone()
+    return row["id"]
+
+
+def test_ask_prints_answer_and_citations(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    db = tmp_path / "docdb.sqlite"
+    doc_id = _seed_corpus(runner, db, tmp_path / "memo.md")
+
+    chat_factory = _chat_factory(
+        StubChatCompletion.tool(
+            [("c1", "search_documents", json.dumps({"query": "解約条項"}))]
+        ),
+        StubChatCompletion.text(
+            f"解約条項は 30 日前の通知が必要です [doc:{doc_id}]"
+        ),
+    )
+
+    result = runner.invoke(
+        main,
+        ["--db", str(db), "ask", "解約条項について教えて"],
+        obj={"llm_factory": chat_factory},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "解約条項は 30 日前" in result.output
+    assert "citations:" in result.output
+    assert doc_id in result.output
+
+
+def test_ask_with_show_trace_prints_tool_calls(
+    runner: CliRunner, tmp_path: Path
+) -> None:
+    db = tmp_path / "docdb.sqlite"
+    _seed_corpus(runner, db, tmp_path / "memo.md")
+
+    chat_factory = _chat_factory(
+        StubChatCompletion.tool([("c1", "list_doc_types", "{}")]),
+        StubChatCompletion.text("ok"),
+    )
+
+    result = runner.invoke(
+        main,
+        ["--db", str(db), "ask", "doc_type の集計は?", "--show-trace"],
+        obj={"llm_factory": chat_factory},
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "trace:" in result.output
+    assert "list_doc_types" in result.output
+
+
+def test_ask_handles_no_answer_path(runner: CliRunner, tmp_path: Path) -> None:
+    db = tmp_path / "docdb.sqlite"
+    _seed_corpus(runner, db, tmp_path / "memo.md")
+
+    # LLM returns blank content with no tool calls.
+    chat_factory = _chat_factory(StubChatCompletion.text(""))
+
+    result = runner.invoke(
+        main,
+        ["--db", str(db), "ask", "?"],
+        obj={"llm_factory": chat_factory},
+    )
+    assert result.exit_code == 0
+    assert "(no answer)" in result.output
 
 
 # ---------------------------------------------------------------------------

@@ -21,6 +21,8 @@ from pathlib import Path
 
 import click
 
+from docdb.agent.loop import SearchAgent
+from docdb.agent.toolbox import Toolbox
 from docdb.config import Settings, get_settings
 from docdb.ingestion import (
     DocumentStore,
@@ -193,6 +195,60 @@ def search(ctx: click.Context, query: str, top_k: int, doc_type: str | None) -> 
         click.echo(f"{score}  {c.document_id}  {c.title or c.source_path or ''}")
         if c.snippet:
             click.echo(f"        {c.snippet}")
+
+
+# ---------------------------------------------------------------------------
+# ask (agent)
+# ---------------------------------------------------------------------------
+@main.command()
+@click.argument("question")
+@click.option("--max-iters", default=8, show_default=True, type=int)
+@click.option(
+    "--show-trace/--no-show-trace",
+    default=False,
+    help="Print every tool call and its arguments after the answer.",
+)
+@click.pass_context
+def ask(
+    ctx: click.Context,
+    question: str,
+    max_iters: int,
+    show_trace: bool,
+) -> None:
+    """Ask the agent a natural-language question."""
+    settings: Settings = ctx.obj["settings"]
+    llm = ctx.obj["llm_factory"](settings)
+    with connection(settings.db_path) as conn:
+        toolbox = Toolbox(conn, llm)
+        agent = SearchAgent(toolbox=toolbox, llm=llm, max_iters=max_iters)
+        result = agent.run(question)
+
+    if result.error:
+        click.echo(f"error: {result.error}", err=True)
+        sys.exit(1)
+
+    click.echo(result.answer or "(no answer)")
+    if result.exhausted:
+        click.echo(
+            f"\n[warning] agent reached max_iters={max_iters} without a "
+            "final answer",
+            err=True,
+        )
+
+    if result.citations:
+        click.echo("\ncitations:")
+        for c in result.citations:
+            label = c.title or c.source_path or ""
+            click.echo(f"  - {c.document_id}  {label}")
+
+    if show_trace:
+        click.echo("\ntrace:")
+        for t in result.trace:
+            badge = "!" if t.error else "·"
+            args_repr = json.dumps(t.arguments, ensure_ascii=False)
+            click.echo(f"  [{t.iteration}] {badge} {t.tool}({args_repr})")
+            if t.error:
+                click.echo(f"      error: {t.error}")
 
 
 # ---------------------------------------------------------------------------
