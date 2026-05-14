@@ -15,6 +15,7 @@ from docdb.ingestion.normalizer import (
     normalize_extraction,
 )
 from docdb.ingestion.parser import Parser, ParsedDocument, Section
+from docdb.ingestion.pipeline import IngestionPipeline, IngestionReport
 from docdb.ingestion.store import DocumentStore
 
 __all__ = [
@@ -23,6 +24,8 @@ __all__ = [
     "DocumentTagLink",
     "Extractor",
     "ExtractionOutcome",
+    "IngestionPipeline",
+    "IngestionReport",
     "NormalizedExtraction",
     "Parser",
     "ParsedDocument",
