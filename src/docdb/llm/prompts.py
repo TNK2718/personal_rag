@@ -81,7 +81,10 @@ def build_extraction_system_prompt(
         if relation_types:
             parts.append(
                 "8. relations[] の `source` / `target` は同じドキュメントの entities[] "
-                "に出てくる (type, name) を指す。解決できないものは出力しない。"
+                "に出てくる (type, name) を指す。`source` は必須。"
+                "`target` が本文から特定できない場合は `null` を入れる "
+                "(該当 relation はパイプライン側で除外される)。"
+                "endpoints を捏造しない。"
             )
 
     assembled = "\n".join(parts)
