@@ -1,9 +1,10 @@
 """Ingestion pipeline scaffolding.
 
-In Phase 1 only the storage layer (``DocumentStore``) lives here. The
-parse/extract/normalise stages land in Phase 2.
+Phase 1 added DocumentStore (the writer). Phase 2 layers parsing,
+LLM-based extraction, normalisation, and an orchestrator on top.
 """
 
+from docdb.ingestion.parser import Parser, ParsedDocument, Section
 from docdb.ingestion.store import DocumentStore
 
-__all__ = ["DocumentStore"]
+__all__ = ["DocumentStore", "Parser", "ParsedDocument", "Section"]
