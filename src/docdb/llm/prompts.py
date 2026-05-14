@@ -214,6 +214,12 @@ DOCDB_SCHEMA_SUMMARY = """\
 --          description, fields JSON, created_ts, updated_ts)
 --   filter examples: WHERE type_slug = 'task'
 --                    AND json_extract(fields, '$.status') = 'pending'
+-- entities_search(entity_id PK FK → entities.id, searchable_text)
+--   content table for entities_fts; the store rebuilds it on upsert.
+-- entities_fts(searchable_text)  -- FTS5, trigram tokenizer
+--   usage: JOIN entities_search es ON es.entity_id = entities.id
+--          JOIN entities_fts ON entities_fts.rowid = es.rowid
+--          WHERE entities_fts MATCH '田中'
 -- relations(id PK, type_slug FK → relation_types.slug, source_entity_id FK → entities.id,
 --           target_entity_id FK → entities.id, fields JSON)
 -- tags(id, canonical_name UNIQUE, aliases JSON, category)
