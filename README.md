@@ -51,8 +51,8 @@ uv run docdb ingest-dir ./data
 
 ```bash
 cd src/frontend
-npm install
-npm run build           # dist/ に出力。Flask が serve する
+pnpm install
+pnpm build              # dist/ に出力。Flask が serve する
 ```
 
 ## 起動
@@ -62,7 +62,7 @@ npm run build           # dist/ に出力。Flask が serve する
 uv run python -m server
 
 # (任意) フロントエンドの開発サーバ (ポート 5173, /api/* を 5000 にプロキシ)
-cd src/frontend && npm run dev
+cd src/frontend && pnpm dev
 ```
 
 ブラウザで `http://localhost:5000` (本番ビルド) もしくは `http://localhost:5173` (開発) を開く。

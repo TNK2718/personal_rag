@@ -21,7 +21,7 @@ import re
 import sqlite3
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable, Literal
+from typing import Iterable, Iterator, Literal
 
 from docdb.ingestion.extractor import Extractor
 from docdb.ingestion.normalizer import normalize_extraction
@@ -105,13 +105,11 @@ class IngestionPipeline:
         root: Path | str,
         *,
         glob: str = "**/*.md",
-    ) -> list[IngestionReport]:
+    ) -> Iterator[IngestionReport]:
         root = Path(root)
-        reports: list[IngestionReport] = []
         for path in sorted(root.glob(glob)):
             if path.is_file():
-                reports.append(self.ingest_file(path))
-        return reports
+                yield self.ingest_file(path)
 
     # ------------------------------------------------------------------
     # Core
