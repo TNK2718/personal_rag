@@ -17,6 +17,8 @@ import math
 
 import pytest
 
+from pydantic import BaseModel
+
 from docdb.llm import LLM, FakeLLM, LLMProtocol
 from docdb.llm.fake import StubChatCompletion
 from docdb.models import ExtractionResult
@@ -55,14 +57,30 @@ def test_extract_falls_back_to_default_instance_when_unscripted() -> None:
     assert result.tags == []
 
 
-def test_extract_type_mismatch_raises_clearly() -> None:
-    class _OtherSchema(ExtractionResult):
-        pass
+def test_extract_type_mismatch_raises_for_unrelated_schemas() -> None:
+    """Strictness still applies for schemas that share no inheritance."""
+
+    class _Unrelated(BaseModel):
+        foo: str = ""
 
     fake = FakeLLM(extract_responses=[ExtractionResult()])
 
     with pytest.raises(TypeError, match="scripted response"):
-        fake.extract("x", _OtherSchema)
+        fake.extract("x", _Unrelated)
+
+
+def test_extract_upcasts_parent_to_dynamic_subclass() -> None:
+    """Stage 3 dynamic models inherit from ExtractionResult; scripted parents
+    must be auto-upcast so existing tests do not have to know the dynamic
+    class name."""
+
+    class _Dynamic(ExtractionResult):
+        extra: list[str] = []  # default → not required from upcast payload
+
+    fake = FakeLLM(extract_responses=[ExtractionResult(title="upcast me")])
+    out = fake.extract("anything", _Dynamic)
+    assert isinstance(out, _Dynamic)
+    assert out.title == "upcast me"
 
 
 # ---------------------------------------------------------------------------

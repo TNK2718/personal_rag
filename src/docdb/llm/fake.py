@@ -105,12 +105,25 @@ class FakeLLM:
         self.calls_extract.append((text, schema))
         if self.extract_responses:
             val = self.extract_responses.pop(0)
-            if not isinstance(val, schema):
-                raise TypeError(
-                    f"FakeLLM.extract scripted response is {type(val).__name__}, "
-                    f"caller asked for {schema.__name__}"
-                )
-            return val
+            if isinstance(val, schema):
+                return val
+            # Stage 3 introduces dynamic per-call ExtractionResult subclasses;
+            # tests still script the static parent. Up-cast across the
+            # parent → child boundary by round-tripping field values. We try
+            # strict validation first; if the scripted value was created via
+            # ``model_construct`` to intentionally hold invalid data (testing
+            # pipeline fallbacks), we fall back to ``model_construct`` on the
+            # target so the bad value survives the upcast.
+            if isinstance(val, BaseModel) and issubclass(schema, type(val)):
+                payload = val.model_dump()
+                try:
+                    return schema.model_validate(payload)
+                except Exception:  # noqa: BLE001 — Pydantic ValidationError, etc.
+                    return schema.model_construct(**payload)
+            raise TypeError(
+                f"FakeLLM.extract scripted response is {type(val).__name__}, "
+                f"caller asked for {schema.__name__}"
+            )
         # Fall back to a default-constructed instance (works when every
         # field has a default; otherwise this raises and signals that
         # the test forgot to script the response).

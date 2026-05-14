@@ -9,17 +9,24 @@ corpus (personal memos, meeting notes, journal entries) is primarily
 Japanese. English content still flows through correctly — the LLM is
 told to keep canonical names in their original script.
 
-Stage 2 stripped the entity/todo extraction guidance from
-``EXTRACTION_SYSTEM`` because the LLM no longer emits those during
-ingestion; Stage 3 rebuilds extraction around the runtime type registry.
+Stage 3 makes the extraction system prompt dynamic: every registered
+entity type and relation type from the runtime registry is rendered
+into the prompt with its label, description, fields_schema summary,
+and free-form ``extraction_hint``. The base instructions
+(``EXTRACTION_SYSTEM_BASE``) stay constant; what the LLM is allowed to
+emit varies per call.
 """
 
 from __future__ import annotations
 
 from docdb.ingestion.parser import ParsedDocument
+from docdb.typing.registry import EntityTypeDef, RelationTypeDef
 
 
-EXTRACTION_SYSTEM = (
+EXTRACTION_PROMPT_MAX_BYTES = 30_000
+
+
+EXTRACTION_SYSTEM_BASE = (
     "あなたは個人ノートから構造化メタデータを抽出するアシスタントです。\n"
     "次のルールに従い、必要なフィールドだけを正確に埋めてください。\n"
     "1. `doc_type` はメモ=memo / 会議=meeting / 日記=journal / 参考資料=reference / 仕様=spec / その他=other から1つ選ぶ。\n"
@@ -30,16 +37,119 @@ EXTRACTION_SYSTEM = (
     "6. 元の文書に存在しない情報を捏造しない。確信が持てないフィールドは空欄/空配列のままにする。"
 )
 
+# Kept for backwards-compat with tests that import the symbol directly.
+EXTRACTION_SYSTEM = EXTRACTION_SYSTEM_BASE
+
+
+def build_extraction_system_prompt(
+    entity_types: list[EntityTypeDef],
+    relation_types: list[RelationTypeDef],
+    *,
+    max_bytes: int = EXTRACTION_PROMPT_MAX_BYTES,
+) -> str:
+    """Assemble the full system prompt for the current type registry.
+
+    The structure is: base rules → entity-type catalogue → relation-type
+    catalogue → closing rule. Each catalogue entry advertises the slug,
+    label, description, field summary, and the user-authored ``extraction_hint``
+    so the LLM has both a schema and a usage cue.
+
+    Hard-capped at ``max_bytes`` UTF-8 bytes; when the assembled prompt grows
+    past the cap, types are dropped from the END (preserving builtins is the
+    caller's responsibility for now — Stage 4 will add an "is_active" knob).
+    """
+    parts: list[str] = [EXTRACTION_SYSTEM_BASE, ""]
+
+    if entity_types:
+        parts.append("# 抽出できる entity 型 (slug : label)")
+        for t in entity_types:
+            parts.append(_render_entity_type(t))
+        parts.append("")
+
+    if relation_types and entity_types:
+        # Relations only make sense when at least one entity type exists.
+        parts.append("# 抽出できる relation 型 (slug : label)")
+        for t in relation_types:
+            parts.append(_render_relation_type(t))
+        parts.append("")
+
+    if entity_types:
+        parts.append(
+            "7. entities[] に登場する `type` は上記 entity 型の slug のみ。"
+            "未登録の概念は entity として出力しない。"
+        )
+        if relation_types:
+            parts.append(
+                "8. relations[] の `source` / `target` は同じドキュメントの entities[] "
+                "に出てくる (type, name) を指す。解決できないものは出力しない。"
+            )
+
+    assembled = "\n".join(parts)
+    encoded = assembled.encode("utf-8")
+    if len(encoded) <= max_bytes:
+        return assembled
+
+    # Truncate by dropping trailing type catalogue entries until we fit.
+    return _truncate_to_fit(parts, max_bytes)
+
+
+def _render_entity_type(t: EntityTypeDef) -> str:
+    head = f"- `{t.slug}` : {t.label}"
+    if t.description:
+        head += f" — {t.description}"
+    lines = [head]
+    if t.fields:
+        for f in t.fields:
+            spec = f"    * {f.name} ({f.type}"
+            if getattr(f, "required", False):
+                spec += ", required"
+            options = getattr(f, "options", None)
+            if options:
+                spec += f", options={list(options)}"
+            spec += ")"
+            lines.append(spec)
+    if t.extraction_hint:
+        lines.append(f"    ヒント: {t.extraction_hint}")
+    return "\n".join(lines)
+
+
+def _render_relation_type(t: RelationTypeDef) -> str:
+    head = f"- `{t.slug}` : {t.label}"
+    endpoints = (
+        f" ({t.source_type_slug or 'any'} → {t.target_type_slug or 'any'})"
+    )
+    head += endpoints
+    if t.description:
+        head += f" — {t.description}"
+    lines = [head]
+    if t.extraction_hint:
+        lines.append(f"    ヒント: {t.extraction_hint}")
+    return "\n".join(lines)
+
+
+def _truncate_to_fit(parts: list[str], max_bytes: int) -> str:
+    """Drop trailing prompt sections until the encoded length fits."""
+    parts = list(parts)
+    while parts:
+        out = "\n".join(parts + ["[... 型カタログを一部省略 ...]"])
+        if len(out.encode("utf-8")) <= max_bytes:
+            return out
+        parts.pop()
+    # Defensive: even the base block doesn't fit — return a clipped string.
+    fallback = EXTRACTION_SYSTEM_BASE.encode("utf-8")[: max_bytes - 64]
+    return fallback.decode("utf-8", errors="ignore") + "\n[... 省略 ...]"
+
 
 def build_extraction_user_prompt(
     parsed: ParsedDocument,
     *,
     max_body_chars: int = 8000,
+    system_prompt: str | None = None,
 ) -> str:
     """Render the document into the user-side prompt for extraction.
 
     Layout:
-        <system instructions>
+        <system instructions, registry-aware when system_prompt is supplied>
         <metadata hints from parsing>
         <document body, truncated to max_body_chars>
     """
@@ -58,10 +168,8 @@ def build_extraction_user_prompt(
         body = body[:max_body_chars]
         truncated = True
 
-    parts = [
-        EXTRACTION_SYSTEM,
-        "",
-    ]
+    header = system_prompt if system_prompt is not None else EXTRACTION_SYSTEM_BASE
+    parts = [header, ""]
     if hints:
         parts.append("# 入力メタ情報")
         parts.extend(hints)
