@@ -6,6 +6,14 @@ repos:
 
   - repo: local
     hooks:
+      - id: refresh-uv-exclude-newer
+        name: Roll tool.uv.exclude-newer to today - 7 days
+        entry: python3 scripts/refresh_uv_exclude_newer.py
+        language: system
+        files: ^pyproject\.toml$
+        pass_filenames: false
+        always_run: true
+
       - id: check-dependency-age
         name: uv.lock minimum package age (>=7 days)
         entry: python3 scripts/check_dependency_age.py

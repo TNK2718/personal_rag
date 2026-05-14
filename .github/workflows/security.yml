@@ -21,6 +21,16 @@ jobs:
         with:
           enable-cache: true
 
+      - name: Ensure tool.uv.exclude-newer is fresh (today - 7 days)
+        run: |
+          python3 scripts/refresh_uv_exclude_newer.py || true
+          if ! git diff --quiet -- pyproject.toml; then
+            echo "::error::pyproject.toml's tool.uv.exclude-newer is stale."
+            echo "Run scripts/refresh_uv_exclude_newer.py locally and commit."
+            git --no-pager diff -- pyproject.toml
+            exit 1
+          fi
+
       - name: Check uv.lock minimum package age (>=7 days)
         run: python3 scripts/check_dependency_age.py
 
