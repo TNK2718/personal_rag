@@ -25,6 +25,7 @@ from pydantic import BaseModel, Field
 
 from docdb.llm.base import LLMProtocol
 from docdb.llm.prompts import TEXT2SQL_PROMPT_MAX_BYTES, build_text2sql_user_prompt
+from docdb.search.entity_resolution import ResolvedCandidate, resolve_mentions
 from docdb.search.sql_guard import UnsafeQueryError, validate_readonly_sql
 from docdb.typing.registry import (
     EntityTypeDef,
@@ -76,12 +77,14 @@ def generate_sql(
     *,
     entity_types: list[EntityTypeDef] = (),
     relation_types: list[RelationTypeDef] = (),
+    mention_candidates: list[ResolvedCandidate] = (),
     max_prompt_bytes: int = TEXT2SQL_PROMPT_MAX_BYTES,
 ) -> GeneratedSQL:
     prompt = build_text2sql_user_prompt(
         question,
         entity_types=entity_types,
         relation_types=relation_types,
+        mention_candidates=mention_candidates,
         max_bytes=max_prompt_bytes,
     )
     return llm.extract(prompt, GeneratedSQL)
@@ -96,11 +99,20 @@ def run_text2sql(
     allowed_tables: set[str] = ALLOWED_TABLES,
     max_rows: int = 100,
     max_prompt_bytes: int = TEXT2SQL_PROMPT_MAX_BYTES,
+    resolution_enabled: bool = True,
+    resolution_top_k: int = 15,
+    resolution_distance_threshold: float = 0.55,
 ) -> Text2SQLResult:
     """Generate → validate → execute. All errors land in the result.
 
     The current entity/relation type registry is fetched from ``conn`` and
     injected into the prompt so the LLM sees each type's fields_schema.
+
+    Mention resolution: when ``resolution_enabled`` is true, the question
+    is embedded and KNN-matched against ``entities_vec`` so candidate
+    entities (with their canonical_name, type_slug, aliases) are passed
+    into the SQL-generation prompt — encouraging the LLM to filter by
+    ``entities.id`` instead of ``LIKE``.
     """
     try:
         entity_types = list_entity_types(conn)
@@ -111,12 +123,20 @@ def run_text2sql(
         entity_types = []
         relation_types = []
 
+    candidates = resolve_mentions(
+        conn, question, llm,
+        top_k=resolution_top_k,
+        distance_threshold=resolution_distance_threshold,
+        enabled=resolution_enabled,
+    )
+
     try:
         gen = generate_sql(
             question,
             llm,
             entity_types=entity_types,
             relation_types=relation_types,
+            mention_candidates=candidates,
             max_prompt_bytes=max_prompt_bytes,
         )
     except Exception as exc:  # noqa: BLE001

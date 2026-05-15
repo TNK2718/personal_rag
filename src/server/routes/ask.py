@@ -35,6 +35,9 @@ def ask():
         llm,
         max_sql_limit=settings.sql_max_limit,
         text2sql_prompt_max_bytes=settings.text2sql_prompt_max_bytes,
+        query_resolution_enabled=settings.query_resolution_enabled,
+        query_resolution_top_k=settings.query_resolution_top_k,
+        query_resolution_distance=settings.query_resolution_distance,
     )
     system_prompt = build_agent_system_prompt(
         list_entity_types(conn),

@@ -167,6 +167,84 @@ def test_agent_can_traverse_relations_via_text_to_sql(conn) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Query-time mention resolution (single-stage, KNN-only)
+# ---------------------------------------------------------------------------
+def test_agent_resolves_surface_form_mention_via_text_to_sql(conn) -> None:
+    """A question whose embedding aligns with a seeded entity's vector
+    must produce a SQL prompt with the resolved candidates section
+    populated — so the agent writes ``entities.id = '<id>'`` instead of
+    ``LIKE``. ``_KeyedEmbedLLM`` pins the embed map so the KNN result
+    is deterministic."""
+    from dataclasses import dataclass, field
+
+    from docdb.llm.fake import _hash_to_unit_vector
+
+    @dataclass
+    class _KeyedEmbedLLM(FakeLLM):
+        embed_overrides: dict[str, list[float]] = field(default_factory=dict)
+
+        def embed(self, texts):
+            self.calls_embed.append(list(texts))
+            return [
+                self.embed_overrides[t]
+                if t in self.embed_overrides
+                else _hash_to_unit_vector(t, self.embed_dim)
+                for t in texts
+            ]
+
+    store = DocumentStore(conn)
+    vec = [0.0] * 1024
+    vec[0] = 1.0
+    alice = Entity(
+        id=entity_id_for("person", "Alice Smith"),
+        type_slug="person",
+        canonical_name="Alice Smith",
+        aliases=["Alice S."],
+    )
+    store.upsert_entity(alice, embedding=vec)
+
+    question = "Aliceのタスクを見せて"
+    fake = _KeyedEmbedLLM(
+        embed_overrides={question: vec},
+        chat_responses=[
+            StubChatCompletion.tool(
+                [("c1", "text_to_sql", json.dumps({"question": question}))]
+            ),
+            StubChatCompletion.text("Alice にタスクは紐付いていません。"),
+        ],
+        extract_responses=[
+            GeneratedSQL(
+                sql=(
+                    "SELECT canonical_name FROM entities "
+                    f"WHERE id = '{alice.id}'"
+                ),
+                reasoning="filter by resolved entity_id from the candidates section",
+            ),
+        ],
+    )
+    agent = SearchAgent(toolbox=Toolbox(conn, fake), llm=fake)
+
+    result = agent.run(question)
+
+    assert result.succeeded, result.error
+    # The SQL the LLM produced — note the test scripts it, but the wiring
+    # assertion below proves the prompt actually carried the candidate so
+    # this SQL form is reachable in real usage.
+    sql_call = next(t for t in result.trace if t.tool == "text_to_sql")
+    assert alice.id in sql_call.result_preview
+    assert "LIKE" not in sql_call.result_preview
+
+    # Wiring assertion: the SQL-generation prompt must have included the
+    # resolved-candidates section with Alice's id and the directive to use
+    # entities.id instead of LIKE.
+    sql_prompt, _schema = fake.calls_extract[-1]
+    assert "# 解決済みエンティティ候補" in sql_prompt
+    assert alice.id in sql_prompt
+    assert "Alice Smith" in sql_prompt
+    assert "entities.id" in sql_prompt
+
+
+# ---------------------------------------------------------------------------
 # AGENT_SYSTEM coherence
 # ---------------------------------------------------------------------------
 def test_agent_system_promotes_text_to_sql_as_default() -> None:

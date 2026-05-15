@@ -16,6 +16,8 @@ from __future__ import annotations
 import pytest
 
 from docdb.llm.fake import FakeLLM
+from docdb.llm.prompts import build_text2sql_user_prompt
+from docdb.search.entity_resolution import ResolvedCandidate
 from docdb.search.text2sql import (
     ALLOWED_TABLES,
     GeneratedSQL,
@@ -250,6 +252,150 @@ def test_prompt_truncates_when_types_exceed_budget(populated_db) -> None:
     # truncation; only the type catalogue can be dropped.
     assert "# 質問" in prompt_text
     assert question in prompt_text
+
+
+# ---------------------------------------------------------------------------
+# Mention-candidate rendering (build_text2sql_user_prompt)
+# ---------------------------------------------------------------------------
+def _alice_candidate() -> ResolvedCandidate:
+    return ResolvedCandidate(
+        entity_id="e-alice",
+        canonical_name="Alice Smith",
+        type_slug="person",
+        aliases=["Alice S."],
+        distance=0.41,
+    )
+
+
+def test_build_text2sql_prompt_includes_candidates_section() -> None:
+    prompt = build_text2sql_user_prompt(
+        "Aliceのタスクを見せて",
+        mention_candidates=[_alice_candidate()],
+    )
+    assert "# 解決済みエンティティ候補" in prompt
+    assert "id=e-alice" in prompt
+    assert 'canonical_name="Alice Smith"' in prompt
+    assert "type_slug=person" in prompt
+    assert "Alice S." in prompt
+    # The directive that tells the LLM what to do with these candidates.
+    assert "entities.id" in prompt
+
+
+def test_build_text2sql_prompt_omits_section_when_no_candidates() -> None:
+    prompt = build_text2sql_user_prompt("?")
+    assert "# 解決済みエンティティ候補" not in prompt
+    assert "entities.id =" not in prompt
+
+
+def test_build_text2sql_prompt_candidates_survive_truncation(populated_db) -> None:
+    # Inflate the entity-type registry so the catalogue alone overflows the
+    # tight byte budget. The candidates section, placed before the catalogue,
+    # must survive while the entity_types catalogue gets dropped from the end.
+    for i in range(40):
+        upsert_entity_type(
+            populated_db,
+            EntityTypeDef(
+                slug=f"custom_{i}",
+                label=f"Custom {i}",
+                description="x" * 400,
+                fields=[
+                    FieldSpecEnum(
+                        name="state", label="State", type="enum",
+                        options=["a", "b", "c"],
+                    )
+                ],
+            ),
+        )
+    from docdb.typing.registry import list_entity_types
+
+    entity_types = list_entity_types(populated_db)
+    prompt = build_text2sql_user_prompt(
+        "Aliceのタスクは?",
+        entity_types=entity_types,
+        mention_candidates=[_alice_candidate()],
+        max_bytes=5_000,
+    )
+    assert "# 解決済みエンティティ候補" in prompt
+    assert "id=e-alice" in prompt
+    # At least one of the inflated custom types is dropped.
+    assert "[... 型カタログを一部省略 ...]" in prompt
+    # And the prompt budget was respected.
+    assert len(prompt.encode("utf-8")) <= 5_000
+
+
+# ---------------------------------------------------------------------------
+# Mention-resolution wiring (run_text2sql ↔ resolve_mentions)
+# ---------------------------------------------------------------------------
+def test_run_text2sql_injects_resolved_candidates_into_prompt(conn) -> None:
+    """An entity seeded with a controlled embedding shows up in the SQL prompt
+    when the question's vector aligns with it via ``_KeyedEmbedLLM``."""
+    from dataclasses import dataclass, field
+
+    from docdb.ingestion.store import DocumentStore
+    from docdb.llm.fake import _hash_to_unit_vector
+    from docdb.models import Entity, entity_id_for
+
+    @dataclass
+    class _KeyedEmbedLLM(FakeLLM):
+        embed_overrides: dict[str, list[float]] = field(default_factory=dict)
+
+        def embed(self, texts):
+            self.calls_embed.append(list(texts))
+            return [
+                self.embed_overrides[t]
+                if t in self.embed_overrides
+                else _hash_to_unit_vector(t, self.embed_dim)
+                for t in texts
+            ]
+
+    vec = [0.0] * 1024
+    vec[0] = 1.0
+    alice = Entity(
+        id=entity_id_for("person", "Alice Smith"),
+        type_slug="person",
+        canonical_name="Alice Smith",
+        aliases=["Alice S."],
+    )
+    DocumentStore(conn).upsert_entity(alice, embedding=vec)
+
+    question = "Aliceのタスクを見せて"
+    fake = _KeyedEmbedLLM(
+        embed_overrides={question: vec},
+        extract_responses=[
+            GeneratedSQL(sql=f"SELECT id FROM entities WHERE id='{alice.id}'"),
+        ],
+    )
+
+    result = run_text2sql(conn, question, fake)
+
+    assert result.succeeded, result.error
+    # The SQL prompt the LLM saw must include the resolved entity_id under
+    # the resolved-candidates header.
+    prompt_text, _schema = fake.calls_extract[-1]
+    assert "# 解決済みエンティティ候補" in prompt_text
+    assert alice.id in prompt_text
+    assert "Alice Smith" in prompt_text
+
+
+def test_run_text2sql_omits_candidates_section_when_no_hits(conn) -> None:
+    """Empty ``entities_vec`` → no candidates section in the SQL prompt."""
+    fake = FakeLLM(extract_responses=[GeneratedSQL(sql="SELECT id FROM documents")])
+    run_text2sql(conn, "全件", fake)
+
+    prompt_text, _schema = fake.calls_extract[-1]
+    assert "# 解決済みエンティティ候補" not in prompt_text
+
+
+def test_run_text2sql_skips_embed_when_resolution_disabled(conn) -> None:
+    """When resolution is disabled, no embed call fires and the prompt has
+    no candidates section."""
+    fake = FakeLLM(extract_responses=[GeneratedSQL(sql="SELECT id FROM documents")])
+    run_text2sql(conn, "メモを出して", fake, resolution_enabled=False)
+
+    prompt_text, _schema = fake.calls_extract[-1]
+    assert "# 解決済みエンティティ候補" not in prompt_text
+    # No embed should have happened.
+    assert fake.calls_embed == []
 
 
 # ---------------------------------------------------------------------------

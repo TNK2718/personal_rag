@@ -32,3 +32,25 @@ def test_unrelated_env_vars_are_ignored(monkeypatch) -> None:
     from docdb.config import Settings
 
     Settings()  # must not raise
+
+
+def test_query_resolution_defaults() -> None:
+    from docdb.config import Settings
+
+    s = Settings(_env_file=None)
+    assert s.query_resolution_enabled is True
+    assert s.query_resolution_top_k == 15
+    assert s.query_resolution_distance == 0.85
+
+
+def test_query_resolution_env_overrides(monkeypatch) -> None:
+    monkeypatch.setenv("DOCDB_QUERY_RESOLUTION_ENABLED", "false")
+    monkeypatch.setenv("DOCDB_QUERY_RESOLUTION_TOP_K", "25")
+    monkeypatch.setenv("DOCDB_QUERY_RESOLUTION_DISTANCE", "0.7")
+
+    from docdb.config import Settings
+
+    s = Settings()
+    assert s.query_resolution_enabled is False
+    assert s.query_resolution_top_k == 25
+    assert s.query_resolution_distance == 0.7

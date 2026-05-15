@@ -331,26 +331,40 @@ def search_entities_by_embedding(
     conn: sqlite3.Connection,
     embedding: Iterable[float],
     *,
-    type_slug: str,
+    type_slug: str | None = None,
     top_k: int = 1,
 ) -> list[tuple[str, float]]:
-    """KNN over ``entities_vec`` restricted to one entity type.
+    """KNN over ``entities_vec``, optionally restricted to one entity type.
 
     Returns ``(entity_id, distance)`` pairs in ascending-distance order.
-    vec0 has no native pre-filter, so we over-fetch and let the JOIN
-    against ``entities`` peel out wrong-type rows; ``top_k * 4`` is a
-    generous cushion for typical type selectivity.
+
+    * ``type_slug=<slug>``: ingest-side dedup path. vec0 has no native
+      pre-filter, so over-fetch (``top_k * 4``) and let the JOIN against
+      ``entities`` peel out wrong-type rows.
+    * ``type_slug=None``: query-time mention-resolution path. No
+      pre-filter to lose rows to, so request exactly ``top_k`` from vec0.
     """
-    knn_k = max(top_k * 4, top_k)
-    rows = conn.execute(
-        "SELECT v.entity_id, v.distance "
-        "FROM entities_vec AS v "
-        "JOIN entities     AS e ON e.id = v.entity_id "
-        "WHERE v.embedding MATCH ? AND v.k = ? AND e.type_slug = ? "
-        "ORDER BY v.distance "
-        "LIMIT ?",
-        (pack_embedding(embedding), knn_k, type_slug, int(top_k)),
-    ).fetchall()
+    if type_slug is None:
+        rows = conn.execute(
+            "SELECT v.entity_id, v.distance "
+            "FROM entities_vec AS v "
+            "JOIN entities     AS e ON e.id = v.entity_id "
+            "WHERE v.embedding MATCH ? AND v.k = ? "
+            "ORDER BY v.distance "
+            "LIMIT ?",
+            (pack_embedding(embedding), int(top_k), int(top_k)),
+        ).fetchall()
+    else:
+        knn_k = max(top_k * 4, top_k)
+        rows = conn.execute(
+            "SELECT v.entity_id, v.distance "
+            "FROM entities_vec AS v "
+            "JOIN entities     AS e ON e.id = v.entity_id "
+            "WHERE v.embedding MATCH ? AND v.k = ? AND e.type_slug = ? "
+            "ORDER BY v.distance "
+            "LIMIT ?",
+            (pack_embedding(embedding), knn_k, type_slug, int(top_k)),
+        ).fetchall()
     return [(r["entity_id"], float(r["distance"])) for r in rows]
 
 

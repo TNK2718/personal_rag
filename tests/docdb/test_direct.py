@@ -216,3 +216,28 @@ def test_search_entities_by_embedding_filters_by_type_slug(conn) -> None:
 
 def test_search_entities_by_embedding_empty_when_no_entities(conn) -> None:
     assert search_entities_by_embedding(conn, _unit_vec(0), type_slug="person") == []
+
+
+def test_search_entities_by_embedding_global_returns_across_types(conn) -> None:
+    """type_slug=None searches the whole entity space; query-time mention
+    resolution uses this because the user's question has no a-priori type."""
+    store = DocumentStore(conn)
+    person = Entity(
+        id=entity_id_for("person", "Alice"), type_slug="person", canonical_name="Alice"
+    )
+    task = Entity(
+        id=entity_id_for("task", "design"),
+        type_slug="task",
+        canonical_name="design",
+        fields={"status": "pending", "priority": "medium"},
+    )
+    store.upsert_entity(person, embedding=_unit_vec(0))
+    store.upsert_entity(task, embedding=_unit_vec(1))
+
+    hits = search_entities_by_embedding(conn, _unit_vec(0), type_slug=None, top_k=5)
+    ids_in_order = [h[0] for h in hits]
+    assert ids_in_order[0] == person.id
+    assert task.id in ids_in_order
+    # Distances are non-decreasing.
+    distances = [h[1] for h in hits]
+    assert distances == sorted(distances)

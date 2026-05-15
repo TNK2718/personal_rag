@@ -50,6 +50,25 @@ class Settings(BaseSettings):
     entity_dedup_enabled: bool = True
     entity_dedup_distance: float = Field(default=0.35, ge=0.0, le=2.0)
 
+    # Query-time mention resolution. Mirrors the ingest-side fuzzy dedup
+    # but runs in the opposite direction: at query time we KNN-search
+    # ``entities_vec`` from the question's embedding and inject the
+    # matches into the text2sql prompt so generated SQL filters by
+    # ``entities.id`` instead of ``LIKE``. The whole-question vector is
+    # noisier than ingest's typed canonical_name embedding, so the
+    # threshold is intentionally far looser than ``entity_dedup_distance``.
+    #
+    # Empirical bge-m3 distances (Japanese, this corpus, 2026-05):
+    #   ingest:  ``person: 田中太郎``       → d=0.000 (exact match)
+    #   query:   ``田中太郎``                → d≈0.67
+    #   query:   ``田中太郎のタスクを見せて`` → d≈0.81
+    #   noise:   unrelated tasks            → d≈0.93+
+    # 0.85 includes both bare names and full-sentence mentions while
+    # filtering most unrelated rows; tune via ``DOCDB_QUERY_RESOLUTION_DISTANCE``.
+    query_resolution_enabled: bool = True
+    query_resolution_top_k: int = Field(default=15, ge=1, le=50)
+    query_resolution_distance: float = Field(default=0.85, ge=0.0, le=2.0)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

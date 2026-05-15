@@ -87,6 +87,9 @@ class Toolbox:
         max_results: int = 20,
         max_sql_limit: int = 100,
         text2sql_prompt_max_bytes: int = 30_000,
+        query_resolution_enabled: bool = True,
+        query_resolution_top_k: int = 15,
+        query_resolution_distance: float = 0.55,
     ) -> None:
         self.conn = conn
         self.llm = llm
@@ -94,6 +97,9 @@ class Toolbox:
         self.max_results = max_results
         self.max_sql_limit = max_sql_limit
         self.text2sql_prompt_max_bytes = text2sql_prompt_max_bytes
+        self.query_resolution_enabled = query_resolution_enabled
+        self.query_resolution_top_k = query_resolution_top_k
+        self.query_resolution_distance = query_resolution_distance
         self._specs, self._handlers = self._build()
 
     # -- Public surface ----------------------------------------------------
@@ -422,6 +428,9 @@ class Toolbox:
             max_limit=self.max_sql_limit,
             max_rows=self.max_sql_limit,
             max_prompt_bytes=self.text2sql_prompt_max_bytes,
+            resolution_enabled=self.query_resolution_enabled,
+            resolution_top_k=self.query_resolution_top_k,
+            resolution_distance_threshold=self.query_resolution_distance,
         )
         return {
             "sql": result.validated_sql or result.sql,
