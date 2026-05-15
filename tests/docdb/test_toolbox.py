@@ -22,7 +22,7 @@ from docdb.agent.toolbox import Toolbox
 from docdb.llm.fake import FakeLLM
 from docdb.search.text2sql import GeneratedSQL
 
-from tests.docdb.fixtures import SAMPLE_DOCS, SAMPLE_ENTITIES
+from tests.docdb.fixtures import SAMPLE_DOCS
 
 
 @pytest.fixture
@@ -205,37 +205,6 @@ def test_describe_schema_slug_without_kind_is_error(toolbox: Toolbox) -> None:
     inv = toolbox.invoke("describe_schema", {"slug": "task"})
     assert inv.succeeded
     assert "error" in inv.result
-
-
-# ---------------------------------------------------------------------------
-# search_entities / get_entity_documents
-# ---------------------------------------------------------------------------
-def test_search_entities_partial_match(toolbox: Toolbox) -> None:
-    inv = toolbox.invoke("search_entities", {"name_partial": "プロジェクト"})
-    assert inv.succeeded
-    assert {e["canonical_name"] for e in inv.result} == {"プロジェクトA"}
-
-
-def test_get_entity_documents(toolbox: Toolbox) -> None:
-    tanaka = SAMPLE_ENTITIES[0]
-    inv = toolbox.invoke("get_entity_documents", {"entity_id": tanaka.id})
-    assert inv.succeeded
-    assert {d["id"] for d in inv.result} == {SAMPLE_DOCS[1].id}
-
-
-# ---------------------------------------------------------------------------
-# search_relations
-# ---------------------------------------------------------------------------
-def test_search_relations_empty_by_default(toolbox: Toolbox) -> None:
-    inv = toolbox.invoke("search_relations", {})
-    assert inv.succeeded
-    assert inv.result == []
-
-
-def test_search_entities_filters_by_type_slug(toolbox: Toolbox) -> None:
-    inv = toolbox.invoke("search_entities", {"name_partial": "", "type_slug": "task"})
-    assert inv.succeeded
-    assert {e["canonical_name"] for e in inv.result} == {"設計レビュー実施"}
 
 
 # ---------------------------------------------------------------------------

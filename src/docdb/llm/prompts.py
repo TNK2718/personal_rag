@@ -317,15 +317,12 @@ AGENT_SYSTEM_BASE = (
     "2. SQL では表現しづらい **自由語句の意味検索** (本文中のフレーズ・概念・言い換え)\n"
     "   が必要なときだけ `search_documents` を使う (3 文字以上; 既定で FTS+ベクトル融合、\n"
     "   純粋 FTS にしたいときだけ `hybrid=false`)。本文確認は `get_document`。\n"
-    "3. 既に id を持っているなら `get_document` (本文)、`find_similar` (類似ドキュメント)、\n"
-    "   `get_entity_documents` (entity 言及ドキュメント) を直接呼ぶ。\n"
-    "4. 固有名詞 → entity を **一発で引きたい近道** としては `search_entities`\n"
-    "   (canonical name の substring + 任意の `type_slug`) も使える。\n"
-    "   ただし条件が型・フィールド・関係を含むなら `text_to_sql` の方が表現力が高い。\n"
-    "5. `text_to_sql` に渡す前にスキーマ (どんな型・フィールド・関係があるか) を\n"
+    "3. 既に id を持っているなら `get_document` (本文)、`find_similar`\n"
+    "   (類似ドキュメントの vec KNN) を直接呼ぶ。\n"
+    "4. `text_to_sql` に渡す前にスキーマ (どんな型・フィールド・関係があるか) を\n"
     "   確かめたいときは `describe_schema` を呼ぶ (引数なしで summary、`kind` で絞り込み、\n"
     "   `kind`+`slug` で 1 型のフィールド詳細まで掘れる; 通常は下のカタログで十分)。\n"
-    "6. 自分で書きたい SQL があるときだけ `execute_readonly_sql`\n"
+    "5. 自分で書きたい SQL があるときだけ `execute_readonly_sql`\n"
     "   (テーブル: documents(id, title, raw_text, summary, doc_type, …)、\n"
     "   entities(id, type_slug, canonical_name, fields JSON, …)、relations(id, type_slug,\n"
     "   source_entity_id, target_entity_id, …)。`body` ではなく `raw_text`)。\n"
@@ -348,10 +345,12 @@ def build_agent_system_prompt(
 ) -> str:
     """Assemble the agent system prompt with the live type catalogue appended.
 
-    The agent only needs slug / label / short description to steer
-    ``search_entities`` and ``search_relations`` toward the right ``type_slug``.
-    Field schemas and extraction hints (used on the extraction side) are
-    deliberately omitted to keep the prompt small at inference time.
+    The agent only needs slug / label / short description to know which
+    ``type_slug`` values to put in ``text_to_sql`` WHERE clauses (and to know
+    a relation's endpoint types when planning a JOIN). Field schemas and
+    extraction hints (used on the extraction side) are deliberately omitted
+    to keep the prompt small at inference time; ``describe_schema`` is the
+    drill-down path when the agent needs full ``fields_schema``.
 
     Hard-capped at ``max_bytes`` UTF-8 bytes; if the assembled prompt grows
     past the cap, trailing catalogue entries are dropped (same approach as

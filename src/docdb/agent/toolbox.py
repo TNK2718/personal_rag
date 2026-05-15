@@ -25,7 +25,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from docdb.llm.base import LLMProtocol
-from docdb.models import Citation, Document, Entity, Relation
+from docdb.models import Citation, Document
 from docdb.search import direct
 from docdb.search.hybrid import hybrid_search
 from docdb.search.sql_guard import UnsafeQueryError, validate_readonly_sql
@@ -258,55 +258,6 @@ class Toolbox:
                 },
             ),
             ToolSpec(
-                name="search_entities",
-                description=(
-                    "Find entities by partial canonical name, optionally filtered "
-                    "by type_slug. The set of valid type slugs comes from "
-                    "list_entity_types — it is NOT a fixed enum."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "name_partial": {"type": "string"},
-                        "type_slug": {
-                            "type": "string",
-                            "description": "Slug from list_entity_types (e.g. 'task', 'person').",
-                        },
-                        "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "default": 10},
-                    },
-                    "required": ["name_partial"],
-                },
-            ),
-            ToolSpec(
-                name="get_entity_documents",
-                description="Return documents that mention a given entity_id.",
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "entity_id": {"type": "string"},
-                        "top_k": {"type": "integer", "minimum": 1, "maximum": 50, "default": 20},
-                    },
-                    "required": ["entity_id"],
-                },
-            ),
-            ToolSpec(
-                name="search_relations",
-                description=(
-                    "Find relations (property-graph edges) by source/target entity id "
-                    "and/or relation type_slug. Useful for questions like "
-                    "'who is assigned to X' or 'what tasks does Alice own'."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "source_entity_id": {"type": "string"},
-                        "target_entity_id": {"type": "string"},
-                        "type_slug": {"type": "string"},
-                        "top_k": {"type": "integer", "minimum": 1, "maximum": 100, "default": 50},
-                    },
-                },
-            ),
-            ToolSpec(
                 name="execute_readonly_sql",
                 description=(
                     "Last-resort escape hatch: execute a hand-crafted SELECT "
@@ -332,9 +283,6 @@ class Toolbox:
             "get_document": self._get_document,
             "find_similar": self._find_similar,
             "describe_schema": self._describe_schema,
-            "search_entities": self._search_entities,
-            "get_entity_documents": self._get_entity_documents,
-            "search_relations": self._search_relations,
             "execute_readonly_sql": self._execute_readonly_sql,
         }
         return specs, handlers
@@ -466,46 +414,6 @@ class Toolbox:
             for name, count in direct.list_doc_types(self.conn)
         ]
 
-    def _search_entities(
-        self,
-        name_partial: str,
-        type_slug: str | None = None,
-        top_k: int = 10,
-    ) -> list[dict]:
-        top_k = min(int(top_k), self.max_results)
-        return [
-            _entity_to_dict(e)
-            for e in direct.search_entities(
-                self.conn, name_partial, type_slug=type_slug, top_k=top_k
-            )
-        ]
-
-    def _get_entity_documents(self, entity_id: str, top_k: int = 20) -> list[dict]:
-        top_k = min(int(top_k), self.max_results)
-        return [
-            _document_to_dict(d)
-            for d in direct.get_entity_documents(self.conn, entity_id, top_k=top_k)
-        ]
-
-    def _search_relations(
-        self,
-        source_entity_id: str | None = None,
-        target_entity_id: str | None = None,
-        type_slug: str | None = None,
-        top_k: int = 50,
-    ) -> list[dict]:
-        top_k = min(int(top_k), self.max_results)
-        return [
-            _relation_to_dict(r)
-            for r in direct.search_relations(
-                self.conn,
-                source_entity_id=source_entity_id,
-                target_entity_id=target_entity_id,
-                type_slug=type_slug,
-                top_k=top_k,
-            )
-        ]
-
     def _text_to_sql(self, question: str) -> dict:
         result = run_text2sql(
             self.conn,
@@ -540,7 +448,7 @@ class Toolbox:
 
 
 # ---------------------------------------------------------------------------
-# Citation / Document / Entity → dict
+# Citation / Document → dict
 # ---------------------------------------------------------------------------
 def _citation_to_dict(c: Citation) -> dict:
     return {
@@ -559,11 +467,3 @@ def _document_to_dict(d: Document) -> dict:
     if payload.get("raw_text") and len(payload["raw_text"]) > 2000:
         payload["raw_text"] = payload["raw_text"][:2000] + "\n[... truncated ...]"
     return payload
-
-
-def _entity_to_dict(e: Entity) -> dict:
-    return e.model_dump()
-
-
-def _relation_to_dict(r: Relation) -> dict:
-    return r.model_dump()
