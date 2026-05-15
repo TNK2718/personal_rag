@@ -51,7 +51,6 @@ from docdb.models import (
     content_hash_for,
     relation_id_for,
 )
-from docdb.search.direct import search_entities_by_embedding
 from docdb.typing.deterministic import run_for_types
 from docdb.typing.registry import (
     list_entity_types,
@@ -342,6 +341,12 @@ class IngestionPipeline:
         row, and merged_canonical is {existing_id: [new canonical_names
         to push as aliases]}.
         """
+        # Imported lazily: docdb.search.direct → docdb.ingestion.store
+        # → docdb.ingestion.__init__ → this module, so a top-level import
+        # creates a circular load that only surfaces when the CLI (not
+        # pytest) walks the import graph.
+        from docdb.search.direct import search_entities_by_embedding
+
         remap: dict[str, str] = {}
         merged_canonical: dict[str, list[str]] = {}
         threshold = self.entity_dedup_distance
