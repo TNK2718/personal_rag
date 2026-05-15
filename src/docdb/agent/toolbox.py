@@ -81,12 +81,14 @@ class Toolbox:
         embedder: LLMProtocol | None = None,
         max_results: int = 20,
         max_sql_limit: int = 100,
+        text2sql_prompt_max_bytes: int = 30_000,
     ) -> None:
         self.conn = conn
         self.llm = llm
         self.embedder = embedder or llm
         self.max_results = max_results
         self.max_sql_limit = max_sql_limit
+        self.text2sql_prompt_max_bytes = text2sql_prompt_max_bytes
         self._specs, self._handlers = self._build()
 
     # -- Public surface ----------------------------------------------------
@@ -435,6 +437,7 @@ class Toolbox:
             self.llm,
             max_limit=self.max_sql_limit,
             max_rows=self.max_sql_limit,
+            max_prompt_bytes=self.text2sql_prompt_max_bytes,
         )
         return {
             "sql": result.validated_sql or result.sql,

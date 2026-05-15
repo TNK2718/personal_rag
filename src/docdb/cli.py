@@ -232,7 +232,12 @@ def ask(
     settings: Settings = ctx.obj["settings"]
     llm = ctx.obj["llm_factory"](settings)
     with connection(settings.db_path) as conn:
-        toolbox = Toolbox(conn, llm)
+        toolbox = Toolbox(
+            conn,
+            llm,
+            max_sql_limit=settings.sql_max_limit,
+            text2sql_prompt_max_bytes=settings.text2sql_prompt_max_bytes,
+        )
         system_prompt = build_agent_system_prompt(
             list_entity_types(conn),
             list_relation_types(conn),

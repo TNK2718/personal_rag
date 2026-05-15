@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     extract_relations: bool = True
     extraction_prompt_max_bytes: int = Field(default=30_000, ge=2_000, le=200_000)
     agent_prompt_max_bytes: int = Field(default=20_000, ge=2_000, le=150_000)
+    text2sql_prompt_max_bytes: int = Field(default=30_000, ge=2_000, le=200_000)
 
 
 @lru_cache(maxsize=1)

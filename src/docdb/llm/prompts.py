@@ -25,6 +25,7 @@ from docdb.typing.registry import EntityTypeDef, RelationTypeDef
 
 EXTRACTION_PROMPT_MAX_BYTES = 30_000
 AGENT_PROMPT_MAX_BYTES = 20_000
+TEXT2SQL_PROMPT_MAX_BYTES = 30_000
 
 
 EXTRACTION_SYSTEM_BASE = (
@@ -126,6 +127,16 @@ def _render_relation_type(t: RelationTypeDef) -> str:
     if t.description:
         head += f" — {t.description}"
     lines = [head]
+    if t.fields:
+        for f in t.fields:
+            spec = f"    * {f.name} ({f.type}"
+            if getattr(f, "required", False):
+                spec += ", required"
+            options = getattr(f, "options", None)
+            if options:
+                spec += f", options={list(options)}"
+            spec += ")"
+            lines.append(spec)
     if t.extraction_hint:
         lines.append(f"    ヒント: {t.extraction_hint}")
     return "\n".join(lines)
@@ -236,14 +247,53 @@ DOCDB_SCHEMA_SUMMARY = """\
 """
 
 
-def build_text2sql_user_prompt(question: str) -> str:
-    return (
-        f"{TEXT2SQL_SYSTEM}\n\n"
-        "# スキーマ\n"
-        f"{DOCDB_SCHEMA_SUMMARY}\n"
-        "# 質問\n"
-        f"{question}\n"
-    )
+def build_text2sql_user_prompt(
+    question: str,
+    *,
+    entity_types: list[EntityTypeDef] = (),
+    relation_types: list[RelationTypeDef] = (),
+    max_bytes: int = TEXT2SQL_PROMPT_MAX_BYTES,
+) -> str:
+    """Assemble the text2sql user prompt, injecting the current type registry.
+
+    Surfacing each type's ``fields_schema`` lets the LLM produce
+    ``json_extract(entities.fields, '$.<key>')`` filters with real key names
+    instead of guessing — small models otherwise emit broken empty-path
+    SQL like ``fields->'$.'`` that SQLite silently evaluates to NULL.
+
+    Hard-capped at ``max_bytes`` UTF-8 bytes; the type catalogue is the only
+    section eligible for truncation — the question always survives.
+    """
+    catalog_parts: list[str] = [
+        TEXT2SQL_SYSTEM,
+        "",
+        "# スキーマ",
+        DOCDB_SCHEMA_SUMMARY,
+    ]
+    if entity_types:
+        catalog_parts.append(
+            "# 登録済み entity 型と fields キー (json_extract(fields, '$.<key>') で参照)"
+        )
+        for t in entity_types:
+            catalog_parts.append(_render_entity_type(t))
+        catalog_parts.append("")
+    if relation_types:
+        catalog_parts.append(
+            "# 登録済み relation 型と fields キー"
+        )
+        for t in relation_types:
+            catalog_parts.append(_render_relation_type(t))
+        catalog_parts.append("")
+
+    question_block = f"# 質問\n{question}\n"
+    question_size = len(question_block.encode("utf-8"))
+    # +1 for the newline we insert between catalog and question.
+    catalog_budget = max(max_bytes - question_size - 1, 200)
+
+    catalog_str = "\n".join(catalog_parts)
+    if len(catalog_str.encode("utf-8")) > catalog_budget:
+        catalog_str = _truncate_to_fit(catalog_parts, catalog_budget)
+    return catalog_str + "\n" + question_block
 
 
 # ---------------------------------------------------------------------------

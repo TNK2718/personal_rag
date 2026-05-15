@@ -24,8 +24,14 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from docdb.llm.base import LLMProtocol
-from docdb.llm.prompts import build_text2sql_user_prompt
+from docdb.llm.prompts import TEXT2SQL_PROMPT_MAX_BYTES, build_text2sql_user_prompt
 from docdb.search.sql_guard import UnsafeQueryError, validate_readonly_sql
+from docdb.typing.registry import (
+    EntityTypeDef,
+    RelationTypeDef,
+    list_entity_types,
+    list_relation_types,
+)
 
 
 ALLOWED_TABLES: set[str] = {
@@ -64,8 +70,20 @@ class Text2SQLResult:
         return self.error is None
 
 
-def generate_sql(question: str, llm: LLMProtocol) -> GeneratedSQL:
-    prompt = build_text2sql_user_prompt(question)
+def generate_sql(
+    question: str,
+    llm: LLMProtocol,
+    *,
+    entity_types: list[EntityTypeDef] = (),
+    relation_types: list[RelationTypeDef] = (),
+    max_prompt_bytes: int = TEXT2SQL_PROMPT_MAX_BYTES,
+) -> GeneratedSQL:
+    prompt = build_text2sql_user_prompt(
+        question,
+        entity_types=entity_types,
+        relation_types=relation_types,
+        max_bytes=max_prompt_bytes,
+    )
     return llm.extract(prompt, GeneratedSQL)
 
 
@@ -77,10 +95,30 @@ def run_text2sql(
     max_limit: int = 50,
     allowed_tables: set[str] = ALLOWED_TABLES,
     max_rows: int = 100,
+    max_prompt_bytes: int = TEXT2SQL_PROMPT_MAX_BYTES,
 ) -> Text2SQLResult:
-    """Generate → validate → execute. All errors land in the result."""
+    """Generate → validate → execute. All errors land in the result.
+
+    The current entity/relation type registry is fetched from ``conn`` and
+    injected into the prompt so the LLM sees each type's fields_schema.
+    """
     try:
-        gen = generate_sql(question, llm)
+        entity_types = list_entity_types(conn)
+        relation_types = list_relation_types(conn)
+    except sqlite3.Error:
+        # Registry fetch is a best-effort enrichment; on failure fall back
+        # to an empty catalogue rather than blocking the SQL generation.
+        entity_types = []
+        relation_types = []
+
+    try:
+        gen = generate_sql(
+            question,
+            llm,
+            entity_types=entity_types,
+            relation_types=relation_types,
+            max_prompt_bytes=max_prompt_bytes,
+        )
     except Exception as exc:  # noqa: BLE001
         return Text2SQLResult(
             question=question,

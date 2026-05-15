@@ -22,6 +22,13 @@ from docdb.search.text2sql import (
     Text2SQLResult,
     run_text2sql,
 )
+from docdb.typing.field_spec import FieldSpecEnum, FieldSpecString
+from docdb.typing.registry import (
+    EntityTypeDef,
+    RelationTypeDef,
+    upsert_entity_type,
+    upsert_relation_type,
+)
 
 from tests.docdb.fixtures import SAMPLE_DOCS
 
@@ -158,6 +165,91 @@ def test_allowed_tables_can_be_narrowed(populated_db) -> None:
     )
     assert not result.succeeded
     assert "disallowed table: entities" in result.error
+
+
+# ---------------------------------------------------------------------------
+# Dynamic type catalogue injection
+# ---------------------------------------------------------------------------
+# The text2sql prompt must surface the per-type ``fields_schema`` so the LLM
+# can produce ``json_extract(fields, '$.<key>')`` filters. Without this, the
+# model has to guess JSON key names from the user's natural language and
+# tends to emit broken paths like ``fields->'$.'`` which SQLite happily
+# evaluates to NULL — making bugs invisible.
+def test_prompt_includes_entity_fields_schema(populated_db) -> None:
+    # The builtin ``task`` type is seeded with status / priority / due_date.
+    fake = FakeLLM(
+        extract_responses=[GeneratedSQL(sql="SELECT id FROM entities")]
+    )
+    run_text2sql(populated_db, "未完了のタスクは?", fake)
+
+    assert fake.calls_extract, "expected the LLM to be called"
+    prompt_text, _schema = fake.calls_extract[-1]
+    # The field names from task.fields_schema must appear.
+    assert "status" in prompt_text
+    assert "priority" in prompt_text
+    assert "due_date" in prompt_text
+    # The enum options must be surfaced so the LLM knows valid filter values.
+    assert "pending" in prompt_text
+
+
+def test_prompt_includes_relation_fields_schema(populated_db) -> None:
+    # Register a relation_type with a field so we can verify it shows up.
+    upsert_relation_type(
+        populated_db,
+        RelationTypeDef(
+            slug="works_on",
+            label="works on",
+            source_type_slug="person",
+            target_type_slug="org",
+            fields=[
+                FieldSpecString(
+                    name="role", label="Role", type="string"
+                ),
+            ],
+        ),
+    )
+    fake = FakeLLM(
+        extract_responses=[GeneratedSQL(sql="SELECT id FROM relations")]
+    )
+    run_text2sql(populated_db, "誰がどこに所属?", fake)
+
+    prompt_text, _schema = fake.calls_extract[-1]
+    assert "works_on" in prompt_text
+    assert "role" in prompt_text
+
+
+def test_prompt_truncates_when_types_exceed_budget(populated_db) -> None:
+    # Inflate the registry with many entity types, then squeeze the budget
+    # so truncation has to kick in. The question section must survive.
+    for i in range(40):
+        upsert_entity_type(
+            populated_db,
+            EntityTypeDef(
+                slug=f"custom_{i}",
+                label=f"Custom Type {i}",
+                description="x" * 400,  # padding to bloat each entry
+                fields=[
+                    FieldSpecEnum(
+                        name="state",
+                        label="State",
+                        type="enum",
+                        options=["a", "b", "c"],
+                    )
+                ],
+            ),
+        )
+    fake = FakeLLM(
+        extract_responses=[GeneratedSQL(sql="SELECT id FROM entities")]
+    )
+    question = "極端に小さいバジェットでも質問は落ちないはず"
+    run_text2sql(populated_db, question, fake, max_prompt_bytes=4_000)
+
+    prompt_text, _schema = fake.calls_extract[-1]
+    assert len(prompt_text.encode("utf-8")) <= 4_000
+    # The question and its header must always be present even after
+    # truncation; only the type catalogue can be dropped.
+    assert "# 質問" in prompt_text
+    assert question in prompt_text
 
 
 # ---------------------------------------------------------------------------

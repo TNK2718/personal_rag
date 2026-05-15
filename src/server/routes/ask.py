@@ -30,7 +30,12 @@ def ask():
 
     conn = get_conn()
     llm = get_llm()
-    toolbox = Toolbox(conn, llm, max_sql_limit=settings.sql_max_limit)
+    toolbox = Toolbox(
+        conn,
+        llm,
+        max_sql_limit=settings.sql_max_limit,
+        text2sql_prompt_max_bytes=settings.text2sql_prompt_max_bytes,
+    )
     system_prompt = build_agent_system_prompt(
         list_entity_types(conn),
         list_relation_types(conn),
