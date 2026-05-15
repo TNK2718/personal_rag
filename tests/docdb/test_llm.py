@@ -13,13 +13,16 @@ exercise only at integration time. What gets unit-tested here:
 
 from __future__ import annotations
 
+import json
 import math
+from types import SimpleNamespace
 
 import pytest
 
 from pydantic import BaseModel
 
 from docdb.llm import LLM, FakeLLM, LLMProtocol
+from docdb.llm.client import _to_native_message
 from docdb.llm.fake import StubChatCompletion
 from docdb.models import ExtractionResult
 
@@ -134,3 +137,124 @@ def test_embed_distinct_inputs_are_almost_orthogonal() -> None:
 def test_embed_dim_is_configurable() -> None:
     fake = FakeLLM(embed_dim=8)
     assert len(fake.embed(["x"])[0]) == 8
+
+
+# ---------------------------------------------------------------------------
+# LLM.chat_with_tools — Ollama native path
+#
+# The real chat path now hits Ollama's ``/api/chat`` (the OpenAI-compat
+# endpoint scrambles tool-call args on small models). We patch the
+# underlying ``ollama.Client.chat`` to assert the wrapper still exposes the
+# OpenAI-style ``.choices[0].message.tool_calls[i].function.{name, arguments}``
+# shape that ``docdb.agent.loop`` consumes.
+# ---------------------------------------------------------------------------
+def _native_text_response(content: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        message=SimpleNamespace(content=content, tool_calls=None)
+    )
+
+
+def _native_tool_response(name: str, arguments: dict) -> SimpleNamespace:
+    call = SimpleNamespace(function=SimpleNamespace(name=name, arguments=arguments))
+    return SimpleNamespace(
+        message=SimpleNamespace(content="", tool_calls=[call])
+    )
+
+
+def test_chat_with_tools_wraps_text_response(monkeypatch) -> None:
+    llm = LLM()
+    monkeypatch.setattr(
+        llm._ollama,
+        "chat",
+        lambda **kw: _native_text_response("final answer"),
+    )
+
+    resp = llm.chat_with_tools([{"role": "user", "content": "hi"}])
+
+    assert resp.choices[0].message.content == "final answer"
+    assert resp.choices[0].message.tool_calls is None
+
+
+def test_chat_with_tools_wraps_tool_calls(monkeypatch) -> None:
+    llm = LLM()
+    monkeypatch.setattr(
+        llm._ollama,
+        "chat",
+        lambda **kw: _native_tool_response("search_documents", {"query": "おはよう"}),
+    )
+
+    resp = llm.chat_with_tools([{"role": "user", "content": "hi"}], tools=[{}])
+
+    msg = resp.choices[0].message
+    assert msg.content is None  # empty content collapses to None
+    assert msg.tool_calls is not None and len(msg.tool_calls) == 1
+    call = msg.tool_calls[0]
+    assert call.id  # synthetic uuid; non-empty
+    assert call.function.name == "search_documents"
+    # arguments must be a JSON string in OpenAI's wire format, with
+    # non-ASCII characters preserved (not \u-escaped).
+    assert isinstance(call.function.arguments, str)
+    assert "おはよう" in call.function.arguments
+    assert json.loads(call.function.arguments) == {"query": "おはよう"}
+
+
+def test_chat_with_tools_forwards_num_ctx_and_keep_alive(monkeypatch) -> None:
+    llm = LLM()
+    captured: dict = {}
+
+    def _spy(**kwargs):
+        captured.update(kwargs)
+        return _native_text_response("ok")
+
+    monkeypatch.setattr(llm._ollama, "chat", _spy)
+    llm.chat_with_tools([{"role": "user", "content": "x"}])
+
+    assert captured["options"]["num_ctx"] == llm.settings.num_ctx
+    assert captured["options"]["temperature"] == 0
+    assert captured["keep_alive"] == llm.settings.keep_alive
+    assert captured["model"] == llm.settings.agent_model
+
+
+def test_to_native_message_unstrings_assistant_tool_call_arguments() -> None:
+    # Shape that ``docdb.agent.loop`` builds when echoing a previous
+    # assistant turn back into the next chat call (loop.py:114-130).
+    echoed = {
+        "role": "assistant",
+        "content": "",
+        "tool_calls": [
+            {
+                "id": "call_abc123",
+                "type": "function",
+                "function": {
+                    "name": "search_documents",
+                    "arguments": '{"query":"hi"}',
+                },
+            }
+        ],
+    }
+
+    out = _to_native_message(echoed)
+
+    assert out["role"] == "assistant"
+    assert "id" not in out["tool_calls"][0]
+    assert "type" not in out["tool_calls"][0]
+    fn = out["tool_calls"][0]["function"]
+    assert fn["name"] == "search_documents"
+    assert fn["arguments"] == {"query": "hi"}  # str -> dict
+
+
+def test_to_native_message_renames_tool_result_name() -> None:
+    tool_msg = {
+        "role": "tool",
+        "tool_call_id": "call_abc123",
+        "name": "search_documents",
+        "content": "[]",
+    }
+
+    out = _to_native_message(tool_msg)
+
+    assert out == {
+        "role": "tool",
+        "content": "[]",
+        "tool_name": "search_documents",
+    }

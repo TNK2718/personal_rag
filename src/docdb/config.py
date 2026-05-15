@@ -21,6 +21,10 @@ class Settings(BaseSettings):
     embed_model: str = "bge-m3"
     embed_dim: int = 1024
     keep_alive: str = "5m"
+    # Ollama defaults num_ctx to 2048 regardless of the model's true context
+    # length, which silently truncates our 20KB system prompt + tool defs and
+    # makes small models emit token-soup. Override per request.
+    num_ctx: int = Field(default=16_384, ge=2_048, le=131_072)
 
     db_path: Path = Path("./storage/docdb.sqlite")
     data_dir: Path = Path("./data")
