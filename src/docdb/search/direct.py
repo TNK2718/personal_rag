@@ -325,15 +325,42 @@ def search_by_embedding(
     embedding: Iterable[float],
     *,
     top_k: int = 10,
+    doc_type: str | None = None,
+    date_from: str | None = None,
+    date_to: str | None = None,
 ) -> list[Citation]:
-    rows = conn.execute(
+    """Vector KNN over ``documents_vec`` with optional structured filters.
+
+    vec0 has no native pre-filter (the virtual table only knows the
+    embedding column), so when callers add structured predicates we ask
+    vec0 for more rows than requested and let the JOIN+WHERE peel them
+    down to ``top_k``. The over-fetch factor 2 is empirical — high enough
+    to absorb typical doc_type / date selectivity, low enough not to scan
+    most of the index.
+    """
+    has_filter = doc_type is not None or date_from is not None or date_to is not None
+    knn_k = top_k * 2 if has_filter else top_k
+
+    sql = (
         "SELECT v.document_id, v.distance, d.title, d.source_path, d.doc_type, d.summary "
         "FROM documents_vec AS v "
         "JOIN documents     AS d ON d.id = v.document_id "
-        "WHERE v.embedding MATCH ? AND v.k = ? "
-        "ORDER BY v.distance",
-        (pack_embedding(embedding), top_k),
-    ).fetchall()
+        "WHERE v.embedding MATCH ? AND v.k = ?"
+    )
+    params: list = [pack_embedding(embedding), knn_k]
+    if doc_type is not None:
+        sql += " AND d.doc_type = ?"
+        params.append(doc_type)
+    if date_from is not None:
+        sql += " AND d.created_at IS NOT NULL AND d.created_at >= ?"
+        params.append(date_from)
+    if date_to is not None:
+        sql += " AND d.created_at IS NOT NULL AND d.created_at <= ?"
+        params.append(date_to)
+    sql += " ORDER BY v.distance LIMIT ?"
+    params.append(int(top_k))
+
+    rows = conn.execute(sql, params).fetchall()
     return [
         Citation(
             document_id=r["document_id"],
