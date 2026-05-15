@@ -53,13 +53,15 @@ def _seed_task(conn: sqlite3.Connection) -> str:
 
 def test_agent_can_discover_types_then_filter_entities(conn) -> None:
     """The canonical flow described in AGENT_SYSTEM:
-    list_entity_types → search_entities(type_slug=...)."""
+    describe_schema → search_entities(type_slug=...)."""
     task_id = _seed_task(conn)
 
     fake = FakeLLM(
         chat_responses=[
-            # Round 1: ask what types exist.
-            StubChatCompletion.tool([("c1", "list_entity_types", "{}")]),
+            # Round 1: ask what entity types exist.
+            StubChatCompletion.tool(
+                [("c1", "describe_schema", json.dumps({"kind": "entities"}))]
+            ),
             # Round 2: now that we know `task` is registered, search for pending ones.
             StubChatCompletion.tool(
                 [
@@ -84,8 +86,8 @@ def test_agent_can_discover_types_then_filter_entities(conn) -> None:
     assert "ship docs" in result.answer
     # Two tools were invoked in order.
     tools = [t.tool for t in result.trace]
-    assert tools == ["list_entity_types", "search_entities"]
-    # The list_entity_types result mentions the task slug.
+    assert tools == ["describe_schema", "search_entities"]
+    # The describe_schema result mentions the task slug.
     assert "task" in result.trace[0].result_preview
 
 
@@ -141,27 +143,38 @@ def test_agent_can_search_relations(conn) -> None:
 # ---------------------------------------------------------------------------
 # AGENT_SYSTEM coherence
 # ---------------------------------------------------------------------------
-def test_agent_system_lists_property_graph_tools() -> None:
-    """A regression in AGENT_SYSTEM that forgot to teach the agent about the
-    new tools would silently degrade behaviour on property-graph questions."""
-    assert "list_entity_types" in AGENT_SYSTEM
-    assert "search_entities" in AGENT_SYSTEM
-    assert "search_relations" in AGENT_SYSTEM
+def test_agent_system_promotes_text_to_sql_as_default() -> None:
+    """Under the SQL-default policy, AGENT_SYSTEM must teach the agent that
+    `text_to_sql` is the primary path for structured queries; the previous
+    flow that fanned out across `search_entities` / `search_relations` is now
+    absorbed into SQL JOINs. The other tools must still be discoverable as
+    fallbacks (`describe_schema`, `search_entities`, `search_documents`)."""
     assert "text_to_sql" in AGENT_SYSTEM
-    # And it must NOT mention the removed Stage-2 ``list_todos`` tool.
+    # text_to_sql is named in step 1 — i.e. before search_documents.
+    assert AGENT_SYSTEM.index("text_to_sql") < AGENT_SYSTEM.index("search_documents")
+    # Schema introspection and the entity-name shortcut remain reachable.
+    assert "describe_schema" in AGENT_SYSTEM
+    assert "search_entities" in AGENT_SYSTEM
+    # And the prompt must NOT mention removed Stage-2 / Phase-1 aliases.
     assert "list_todos" not in AGENT_SYSTEM
+    assert "list_entity_types" not in AGENT_SYSTEM
+    assert "list_relation_types" not in AGENT_SYSTEM
+    assert "list_doc_types" not in AGENT_SYSTEM
 
 
 def test_toolbox_specs_match_agent_system_advertised_tools(conn) -> None:
     toolbox = Toolbox(conn, FakeLLM())
     declared = {spec.name for spec in toolbox.specs()}
     assert {
-        "list_entity_types",
+        "describe_schema",
         "search_entities",
         "search_relations",
         "text_to_sql",
     }.issubset(declared)
     assert "list_todos" not in declared
+    assert "list_entity_types" not in declared
+    assert "list_relation_types" not in declared
+    assert "list_doc_types" not in declared
 
 
 # ---------------------------------------------------------------------------

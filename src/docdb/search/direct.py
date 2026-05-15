@@ -114,6 +114,13 @@ def list_doc_types(conn: sqlite3.Connection) -> list[tuple[str, int]]:
     return [(r["doc_type"], int(r["n"])) for r in rows]
 
 
+def count_entities_by_type(conn: sqlite3.Connection) -> dict[str, int]:
+    rows = conn.execute(
+        "SELECT type_slug, COUNT(*) AS n FROM entities GROUP BY type_slug"
+    ).fetchall()
+    return {r["type_slug"]: int(r["n"]) for r in rows}
+
+
 def get_recent_documents(
     conn: sqlite3.Connection, *, days: int = 7, limit: int = 20
 ) -> list[Document]:

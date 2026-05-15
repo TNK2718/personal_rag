@@ -66,8 +66,10 @@ def test_agent_runs_tools_then_returns_final_answer(populated_db) -> None:
     # Two tool invocations recorded.
     assert [t.tool for t in result.trace] == ["search_documents", "get_document"]
 
-    # Citation auto-harvested from the tool results.
-    assert {c.document_id for c in result.citations} == {cancel_id}
+    # Citation auto-harvested from the tool results. search_documents now
+    # defaults to hybrid, so the vec arm can introduce additional candidates;
+    # we only assert the focal document is among them.
+    assert cancel_id in {c.document_id for c in result.citations}
 
 
 def test_agent_handles_multiple_tool_calls_in_one_turn(populated_db) -> None:
@@ -186,7 +188,7 @@ def test_assistant_and_tool_messages_are_appended_in_order(populated_db) -> None
     fake = FakeLLM(
         chat_responses=[
             StubChatCompletion.tool(
-                [("c1", "list_doc_types", "{}")]
+                [("c1", "describe_schema", json.dumps({"kind": "doc_types"}))]
             ),
             StubChatCompletion.text("ok"),
         ]
@@ -204,7 +206,7 @@ def test_assistant_and_tool_messages_are_appended_in_order(populated_db) -> None
     assert roles[2] == "assistant"
     assert roles[3] == "tool"
 
-    # The tool message carries the JSON output from list_doc_types.
+    # The tool message carries the JSON output from describe_schema.
     tool_payload = json.loads(second_call_messages[3]["content"])
-    assert isinstance(tool_payload, list)
-    assert all("doc_type" in entry for entry in tool_payload)
+    assert isinstance(tool_payload, dict)
+    assert all("doc_type" in entry for entry in tool_payload["doc_types"])

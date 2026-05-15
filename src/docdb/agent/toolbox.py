@@ -30,7 +30,12 @@ from docdb.search import direct
 from docdb.search.hybrid import hybrid_search
 from docdb.search.sql_guard import UnsafeQueryError, validate_readonly_sql
 from docdb.search.text2sql import ALLOWED_TABLES, run_text2sql
-from docdb.typing.registry import list_entity_types, list_relation_types
+from docdb.typing.registry import (
+    get_entity_type,
+    get_relation_type,
+    list_entity_types,
+    list_relation_types,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -145,11 +150,43 @@ class Toolbox:
     def _build(self) -> tuple[list[ToolSpec], dict[str, Handler]]:
         specs: list[ToolSpec] = [
             ToolSpec(
+                name="text_to_sql",
+                description=(
+                    "**Default tool for any structured query.** Translate a "
+                    "natural-language question into a safe read-only SELECT "
+                    "against documents / entities / relations / tags and run "
+                    "it. The schema (every entity/relation type slug and its "
+                    "fields) is injected into the prompt automatically — you "
+                    "do NOT need to look up table or column names first. Try "
+                    "this first for any question involving counts, filters, "
+                    "joins, type-based conditions (tasks/meetings/people/…), "
+                    "date ranges, or LIKE matches. Only fall back to "
+                    "`search_documents` when the question requires free-text "
+                    "semantic matching (paraphrase / concept search) that SQL "
+                    "cannot express. The natural-language question is passed "
+                    "straight through; do NOT write SQL here."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The natural-language question to translate into SQL.",
+                        }
+                    },
+                    "required": ["question"],
+                },
+            ),
+            ToolSpec(
                 name="search_documents",
                 description=(
-                    "Search the corpus by query. Uses FTS5 by default; set "
-                    "`hybrid=true` to fuse with vector similarity (slower "
-                    "but better recall on paraphrases)."
+                    "Free-text semantic / lexical search **fallback** for "
+                    "questions SQL cannot express (paraphrase, concept search, "
+                    "fuzzy body matches). Prefer `text_to_sql` for any "
+                    "structured filter or aggregation. By default fuses FTS5 "
+                    "with vector similarity (RRF). Set `hybrid=false` to skip "
+                    "the embed call and run pure FTS. If the embedder is "
+                    "unavailable, falls back to FTS automatically."
                 ),
                 parameters={
                     "type": "object",
@@ -162,7 +199,7 @@ class Toolbox:
                         },
                         "date_from": {"type": "string", "description": "ISO YYYY-MM-DD lower bound"},
                         "date_to": {"type": "string", "description": "ISO YYYY-MM-DD upper bound"},
-                        "hybrid": {"type": "boolean", "default": False},
+                        "hybrid": {"type": "boolean", "default": True},
                     },
                     "required": ["query"],
                 },
@@ -189,25 +226,36 @@ class Toolbox:
                 },
             ),
             ToolSpec(
-                name="list_doc_types",
-                description="Return counts of documents per doc_type.",
-                parameters={"type": "object", "properties": {}},
-            ),
-            ToolSpec(
-                name="list_entity_types",
+                name="describe_schema",
                 description=(
-                    "Return every registered entity type with its slug, label, and "
-                    "fields_schema. Call this before search_entities when the user "
-                    "asks about a kind of thing (tasks, people, meetings, ...) so "
-                    "you know what type_slug to filter by and which custom fields "
-                    "exist."
+                    "Inspect the catalog of entity types, relation types, and "
+                    "doc types. Default returns a compact summary (slug, label, "
+                    "counts; no per-field schema). Pass `kind` to scope to one "
+                    "catalog, and `kind`+`slug` to drill into a single type and "
+                    "get its full fields_schema / endpoints. Call this before "
+                    "search_entities when the user asks about a kind of thing "
+                    "(tasks, people, meetings, ...) so you know which type_slug "
+                    "to filter by."
                 ),
-                parameters={"type": "object", "properties": {}},
-            ),
-            ToolSpec(
-                name="list_relation_types",
-                description="Return every registered relation type with its slug and endpoints.",
-                parameters={"type": "object", "properties": {}},
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "kind": {
+                            "type": "string",
+                            "enum": ["entities", "relations", "doc_types"],
+                            "description": "Restrict the result to one catalog. Omit for a full summary.",
+                        },
+                        "slug": {
+                            "type": "string",
+                            "description": (
+                                "Drill into one type and return its full "
+                                "fields_schema (entities) or endpoints "
+                                "(relations). Requires `kind` to be 'entities' "
+                                "or 'relations'."
+                            ),
+                        },
+                    },
+                },
             ),
             ToolSpec(
                 name="search_entities",
@@ -259,28 +307,6 @@ class Toolbox:
                 },
             ),
             ToolSpec(
-                name="text_to_sql",
-                description=(
-                    "Translate a natural-language question into a safe read-only "
-                    "SELECT against documents / entities / relations / tags and "
-                    "run it. Prefer this over `execute_readonly_sql` for any "
-                    "cross-table aggregation, count, LIKE search, or schema-aware "
-                    "filter — the underlying prompt is given the full schema, so "
-                    "column names won't be hallucinated. The natural-language "
-                    "question is passed straight through; do not write SQL here."
-                ),
-                parameters={
-                    "type": "object",
-                    "properties": {
-                        "question": {
-                            "type": "string",
-                            "description": "The natural-language question to translate into SQL.",
-                        }
-                    },
-                    "required": ["question"],
-                },
-            ),
-            ToolSpec(
                 name="execute_readonly_sql",
                 description=(
                     "Last-resort escape hatch: execute a hand-crafted SELECT "
@@ -301,16 +327,14 @@ class Toolbox:
         ]
 
         handlers: dict[str, Handler] = {
+            "text_to_sql": self._text_to_sql,
             "search_documents": self._search_documents,
-            "find_similar": self._find_similar,
             "get_document": self._get_document,
-            "list_doc_types": self._list_doc_types,
-            "list_entity_types": self._list_entity_types,
-            "list_relation_types": self._list_relation_types,
+            "find_similar": self._find_similar,
+            "describe_schema": self._describe_schema,
             "search_entities": self._search_entities,
             "get_entity_documents": self._get_entity_documents,
             "search_relations": self._search_relations,
-            "text_to_sql": self._text_to_sql,
             "execute_readonly_sql": self._execute_readonly_sql,
         }
         return specs, handlers
@@ -325,11 +349,16 @@ class Toolbox:
         doc_type: str | None = None,
         date_from: str | None = None,
         date_to: str | None = None,
-        hybrid: bool = False,
+        hybrid: bool = True,
     ) -> list[dict]:
         top_k = min(int(top_k), self.max_results)
+        embedding: list[float] | None = None
         if hybrid:
-            [embedding] = self.embedder.embed([query])
+            try:
+                [embedding] = self.embedder.embed([query])
+            except Exception:  # noqa: BLE001 — embedder offline; fall back to FTS
+                embedding = None
+        if hybrid and embedding is not None:
             hits = hybrid_search(
                 self.conn,
                 query,
@@ -361,33 +390,80 @@ class Toolbox:
         doc = direct.get_document(self.conn, document_id)
         return _document_to_dict(doc) if doc else None
 
-    def _list_doc_types(self) -> list[dict]:
-        return [
-            {"doc_type": name, "count": count}
-            for name, count in direct.list_doc_types(self.conn)
-        ]
+    def _describe_schema(
+        self,
+        kind: str | None = None,
+        slug: str | None = None,
+    ) -> dict:
+        if slug is not None and kind not in ("entities", "relations"):
+            return {"error": "slug requires kind to be 'entities' or 'relations'"}
 
-    def _list_entity_types(self) -> list[dict]:
+        if kind == "entities":
+            return {"entity_types": self._entity_types_payload(slug=slug)}
+        if kind == "relations":
+            return {"relation_types": self._relation_types_payload(slug=slug)}
+        if kind == "doc_types":
+            return {"doc_types": self._doc_types_payload()}
+
+        return {
+            "entity_types": self._entity_types_payload(),
+            "relation_types": self._relation_types_payload(),
+            "doc_types": self._doc_types_payload(),
+        }
+
+    def _entity_types_payload(self, *, slug: str | None = None) -> list[dict]:
+        counts = direct.count_entities_by_type(self.conn)
+        if slug is not None:
+            t = get_entity_type(self.conn, slug)
+            if t is None:
+                return []
+            return [
+                {
+                    "slug": t.slug,
+                    "label": t.label,
+                    "description": t.description,
+                    "count": counts.get(t.slug, 0),
+                    "fields": [f.model_dump(exclude_none=True) for f in t.fields],
+                }
+            ]
         return [
             {
                 "slug": t.slug,
                 "label": t.label,
-                "description": t.description,
-                "fields": [f.model_dump(exclude_none=True) for f in t.fields],
+                "count": counts.get(t.slug, 0),
             }
             for t in list_entity_types(self.conn)
         ]
 
-    def _list_relation_types(self) -> list[dict]:
+    def _relation_types_payload(self, *, slug: str | None = None) -> list[dict]:
+        if slug is not None:
+            t = get_relation_type(self.conn, slug)
+            if t is None:
+                return []
+            return [
+                {
+                    "slug": t.slug,
+                    "label": t.label,
+                    "description": t.description,
+                    "source_type_slug": t.source_type_slug,
+                    "target_type_slug": t.target_type_slug,
+                    "fields": [f.model_dump(exclude_none=True) for f in t.fields],
+                }
+            ]
         return [
             {
                 "slug": t.slug,
                 "label": t.label,
-                "description": t.description,
                 "source_type_slug": t.source_type_slug,
                 "target_type_slug": t.target_type_slug,
             }
             for t in list_relation_types(self.conn)
+        ]
+
+    def _doc_types_payload(self) -> list[dict]:
+        return [
+            {"doc_type": name, "count": count}
+            for name, count in direct.list_doc_types(self.conn)
         ]
 
     def _search_entities(
