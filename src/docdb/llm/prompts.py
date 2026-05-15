@@ -239,7 +239,7 @@ DOCDB_SCHEMA_SUMMARY = """\
 -- entities_fts(searchable_text)  -- FTS5, trigram tokenizer
 --   usage: JOIN entities_search es ON es.entity_id = entities.id
 --          JOIN entities_fts ON entities_fts.rowid = es.rowid
---          WHERE entities_fts MATCH '田中'
+--          WHERE entities_fts MATCH '<キーワード>'
 -- relations(id PK, type_slug FK → relation_types.slug, source_entity_id FK → entities.id,
 --           target_entity_id FK → entities.id, fields JSON)
 -- tags(id, canonical_name UNIQUE, aliases JSON, category)
