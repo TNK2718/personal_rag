@@ -111,7 +111,16 @@ def validate_readonly_sql(
     if not _outermost_has_limit(tree):
         tree = tree.limit(max_limit)
 
-    return tree.sql(dialect="sqlite")
+    # Render in sqlglot's default (generic-ish) dialect rather than
+    # ``sqlite``: the sqlite dialect transpiles
+    # ``json_extract(col, '$.path')`` to the ``col -> '$.path'`` shorthand
+    # (SQLite 3.38+). Python's stdlib ``sqlite3`` on Windows still bundles
+    # 3.37.2, so executing the rewritten form yields ``near ">": syntax
+    # error``. The default render keeps ``JSON_EXTRACT(...)`` as a
+    # function call, which every supported SQLite version understands;
+    # all the other SQLite-specific constructs we generate (MATCH, AS
+    # aliases, …) round-trip identically through this render.
+    return tree.sql()
 
 
 def _outermost_has_limit(tree: exp.Expression) -> bool:
