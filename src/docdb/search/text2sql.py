@@ -101,7 +101,13 @@ def run_text2sql(
     max_prompt_bytes: int = TEXT2SQL_PROMPT_MAX_BYTES,
     resolution_enabled: bool = True,
     resolution_top_k: int = 15,
-    resolution_distance_threshold: float = 0.55,
+    # Default must mirror ``Settings.query_resolution_distance``; the
+    # Toolbox path always overrides this with the Settings value, but
+    # direct callers (smoke scripts, ad-hoc tests, future call sites)
+    # should get the same threshold without having to remember to pass
+    # it. An earlier default of 0.55 left ε-style mention annotation
+    # silently disabled in every direct call.
+    resolution_distance_threshold: float = 0.85,
 ) -> Text2SQLResult:
     """Generate → validate → execute. All errors land in the result.
 
