@@ -432,12 +432,17 @@ class Toolbox:
             resolution_top_k=self.query_resolution_top_k,
             resolution_distance_threshold=self.query_resolution_distance,
         )
-        return {
+        payload: dict = {
             "sql": result.validated_sql or result.sql,
             "reasoning": result.reasoning,
             "rows": result.rows,
             "error": result.error,
         }
+        # Only surfaced when the retry path fired; lets the agent
+        # acknowledge the surface-form rewrite in its final answer.
+        if result.rewritten_question:
+            payload["rewritten_question"] = result.rewritten_question
+        return payload
 
     def _execute_readonly_sql(self, sql: str) -> dict:
         try:

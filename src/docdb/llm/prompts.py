@@ -19,13 +19,8 @@ emit varies per call.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 from docdb.ingestion.parser import ParsedDocument
 from docdb.typing.registry import EntityTypeDef, RelationTypeDef
-
-if TYPE_CHECKING:
-    from docdb.search.entity_resolution import ResolvedCandidate
 
 
 EXTRACTION_PROMPT_MAX_BYTES = 30_000
@@ -257,7 +252,6 @@ def build_text2sql_user_prompt(
     *,
     entity_types: list[EntityTypeDef] = (),
     relation_types: list[RelationTypeDef] = (),
-    mention_candidates: "list[ResolvedCandidate]" = (),
     max_bytes: int = TEXT2SQL_PROMPT_MAX_BYTES,
 ) -> str:
     """Assemble the text2sql user prompt, injecting the current type registry.
@@ -267,14 +261,11 @@ def build_text2sql_user_prompt(
     instead of guessing — small models otherwise emit broken empty-path
     SQL like ``fields->'$.'`` that SQLite silently evaluates to NULL.
 
-    When ``mention_candidates`` is non-empty (query-time mention resolution
-    has surfaced KNN matches in ``entities_vec``), a "# 解決済みエンティティ
-    候補" section is inserted before the type catalogue so the LLM can write
-    ``entities.id = '<entity_id>'`` directly instead of ``LIKE`` filters.
-
     Hard-capped at ``max_bytes`` UTF-8 bytes; the type catalogue is the
-    truncation target. The candidates section is placed before the catalogue
-    so it survives end-truncation along with the schema summary.
+    only section eligible for truncation — the question always survives.
+    Mention resolution lives outside this builder: on the retry path
+    ``run_text2sql`` rewrites the ``question`` in place to surface
+    canonical names; the rewritten string flows in here unchanged.
     """
     catalog_parts: list[str] = [
         TEXT2SQL_SYSTEM,
@@ -282,16 +273,6 @@ def build_text2sql_user_prompt(
         "# スキーマ",
         DOCDB_SCHEMA_SUMMARY,
     ]
-    if mention_candidates:
-        catalog_parts.append("# 解決済みエンティティ候補")
-        catalog_parts.append(
-            "以下は質問の埋め込みベクトルから entities_vec を KNN で引いた候補です。\n"
-            "質問が下記のいずれかを指していると判断できる場合、SQL では LIKE ではなく\n"
-            "`entities.id = '<entity_id>'` で絞ること。aliases は参考情報。"
-        )
-        for c in mention_candidates:
-            catalog_parts.append(_render_mention_candidate(c))
-        catalog_parts.append("")
     if entity_types:
         catalog_parts.append(
             "# 登録済み entity 型と fields キー (json_extract(fields, '$.<key>') で参照)"
@@ -316,14 +297,6 @@ def build_text2sql_user_prompt(
     if len(catalog_str.encode("utf-8")) > catalog_budget:
         catalog_str = _truncate_to_fit(catalog_parts, catalog_budget)
     return catalog_str + "\n" + question_block
-
-
-def _render_mention_candidate(c: "ResolvedCandidate") -> str:
-    aliases = "[]" if not c.aliases else "[" + ", ".join(f'"{a}"' for a in c.aliases) + "]"
-    return (
-        f'- id={c.entity_id}   type_slug={c.type_slug}   '
-        f'canonical_name="{c.canonical_name}"   aliases={aliases}   d={c.distance:.2f}'
-    )
 
 
 # ---------------------------------------------------------------------------

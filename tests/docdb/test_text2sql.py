@@ -16,8 +16,6 @@ from __future__ import annotations
 import pytest
 
 from docdb.llm.fake import FakeLLM
-from docdb.llm.prompts import build_text2sql_user_prompt
-from docdb.search.entity_resolution import ResolvedCandidate
 from docdb.search.text2sql import (
     ALLOWED_TABLES,
     GeneratedSQL,
@@ -255,85 +253,18 @@ def test_prompt_truncates_when_types_exceed_budget(populated_db) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Mention-candidate rendering (build_text2sql_user_prompt)
+# KNN-fallback retry (run_text2sql)
 # ---------------------------------------------------------------------------
-def _alice_candidate() -> ResolvedCandidate:
-    return ResolvedCandidate(
-        entity_id="e-alice",
-        canonical_name="Alice Smith",
-        type_slug="person",
-        aliases=["Alice S."],
-        distance=0.41,
-    )
-
-
-def test_build_text2sql_prompt_includes_candidates_section() -> None:
-    prompt = build_text2sql_user_prompt(
-        "Aliceのタスクを見せて",
-        mention_candidates=[_alice_candidate()],
-    )
-    assert "# 解決済みエンティティ候補" in prompt
-    assert "id=e-alice" in prompt
-    assert 'canonical_name="Alice Smith"' in prompt
-    assert "type_slug=person" in prompt
-    assert "Alice S." in prompt
-    # The directive that tells the LLM what to do with these candidates.
-    assert "entities.id" in prompt
-
-
-def test_build_text2sql_prompt_omits_section_when_no_candidates() -> None:
-    prompt = build_text2sql_user_prompt("?")
-    assert "# 解決済みエンティティ候補" not in prompt
-    assert "entities.id =" not in prompt
-
-
-def test_build_text2sql_prompt_candidates_survive_truncation(populated_db) -> None:
-    # Inflate the entity-type registry so the catalogue alone overflows the
-    # tight byte budget. The candidates section, placed before the catalogue,
-    # must survive while the entity_types catalogue gets dropped from the end.
-    for i in range(40):
-        upsert_entity_type(
-            populated_db,
-            EntityTypeDef(
-                slug=f"custom_{i}",
-                label=f"Custom {i}",
-                description="x" * 400,
-                fields=[
-                    FieldSpecEnum(
-                        name="state", label="State", type="enum",
-                        options=["a", "b", "c"],
-                    )
-                ],
-            ),
-        )
-    from docdb.typing.registry import list_entity_types
-
-    entity_types = list_entity_types(populated_db)
-    prompt = build_text2sql_user_prompt(
-        "Aliceのタスクは?",
-        entity_types=entity_types,
-        mention_candidates=[_alice_candidate()],
-        max_bytes=5_000,
-    )
-    assert "# 解決済みエンティティ候補" in prompt
-    assert "id=e-alice" in prompt
-    # At least one of the inflated custom types is dropped.
-    assert "[... 型カタログを一部省略 ...]" in prompt
-    # And the prompt budget was respected.
-    assert len(prompt.encode("utf-8")) <= 5_000
-
-
-# ---------------------------------------------------------------------------
-# Mention-resolution wiring (run_text2sql ↔ resolve_mentions)
-# ---------------------------------------------------------------------------
-def test_run_text2sql_injects_resolved_candidates_into_prompt(conn) -> None:
-    """An entity seeded with a controlled embedding shows up in the SQL prompt
-    when the question's vector aligns with it via ``_KeyedEmbedLLM``."""
+# Resolution is lazy: the primary attempt sees the question verbatim with
+# no embedding cost. Only when the primary errors out or returns zero rows
+# does ``run_text2sql`` invoke ``resolve_mentions`` + canonicalise the
+# surface forms and retry once. These tests pin that behaviour.
+def _make_keyed_embed_llm():
+    """``FakeLLM`` with a text→vector override map, defined inline so the
+    tests don't need to import a fixture from the pipeline test file."""
     from dataclasses import dataclass, field
 
-    from docdb.ingestion.store import DocumentStore
     from docdb.llm.fake import _hash_to_unit_vector
-    from docdb.models import Entity, entity_id_for
 
     @dataclass
     class _KeyedEmbedLLM(FakeLLM):
@@ -348,6 +279,13 @@ def test_run_text2sql_injects_resolved_candidates_into_prompt(conn) -> None:
                 for t in texts
             ]
 
+    return _KeyedEmbedLLM
+
+
+def _seed_alice(conn):
+    from docdb.ingestion.store import DocumentStore
+    from docdb.models import Entity, entity_id_for
+
     vec = [0.0] * 1024
     vec[0] = 1.0
     alice = Entity(
@@ -357,11 +295,40 @@ def test_run_text2sql_injects_resolved_candidates_into_prompt(conn) -> None:
         aliases=["Alice S."],
     )
     DocumentStore(conn).upsert_entity(alice, embedding=vec)
+    return alice, vec
 
-    question = "Aliceのタスクを見せて"
-    fake = _KeyedEmbedLLM(
+
+def test_run_text2sql_skips_resolution_on_primary_success(conn) -> None:
+    """Primary returned rows → no retry, no embed call. Resolution is lazy."""
+    alice, _vec = _seed_alice(conn)
+    KeyedEmbed = _make_keyed_embed_llm()
+    fake = KeyedEmbed(
+        extract_responses=[
+            GeneratedSQL(sql=f"SELECT id FROM entities WHERE id='{alice.id}'"),
+        ],
+    )
+
+    result = run_text2sql(conn, "anything", fake)
+
+    assert result.succeeded
+    assert result.rewritten_question is None
+    assert fake.calls_embed == []  # no embedding cost on the happy path
+    assert len(fake.calls_extract) == 1  # primary only
+
+
+def test_run_text2sql_retries_on_sql_error(conn) -> None:
+    """Primary SQL errors → resolution fires, canonicalises, retry succeeds."""
+    alice, vec = _seed_alice(conn)
+    question = "Alice S. の件"  # surface form is the alias
+    rewritten = "Alice Smith の件"
+
+    KeyedEmbed = _make_keyed_embed_llm()
+    fake = KeyedEmbed(
         embed_overrides={question: vec},
         extract_responses=[
+            # Primary: SQLite runtime error (bad column).
+            GeneratedSQL(sql="SELECT bogus FROM entities"),
+            # Retry: clean SELECT against the canonicalised question.
             GeneratedSQL(sql=f"SELECT id FROM entities WHERE id='{alice.id}'"),
         ],
     )
@@ -369,33 +336,91 @@ def test_run_text2sql_injects_resolved_candidates_into_prompt(conn) -> None:
     result = run_text2sql(conn, question, fake)
 
     assert result.succeeded, result.error
-    # The SQL prompt the LLM saw must include the resolved entity_id under
-    # the resolved-candidates header.
-    prompt_text, _schema = fake.calls_extract[-1]
-    assert "# 解決済みエンティティ候補" in prompt_text
-    assert alice.id in prompt_text
-    assert "Alice Smith" in prompt_text
+    assert result.rewritten_question == rewritten
+    assert result.question == question  # original surfaces on .question
+    assert len(fake.calls_extract) == 2  # primary + retry
+    # The retry prompt got the canonicalised question.
+    retry_prompt = fake.calls_extract[1][0]
+    assert "Alice Smith の件" in retry_prompt
 
 
-def test_run_text2sql_omits_candidates_section_when_no_hits(conn) -> None:
-    """Empty ``entities_vec`` → no candidates section in the SQL prompt."""
-    fake = FakeLLM(extract_responses=[GeneratedSQL(sql="SELECT id FROM documents")])
-    run_text2sql(conn, "全件", fake)
+def test_run_text2sql_retries_on_zero_rows(conn) -> None:
+    """Primary returns no rows → retry with canonicalised question."""
+    alice, vec = _seed_alice(conn)
+    question = "Alice S. のタスク"
 
-    prompt_text, _schema = fake.calls_extract[-1]
-    assert "# 解決済みエンティティ候補" not in prompt_text
+    KeyedEmbed = _make_keyed_embed_llm()
+    fake = KeyedEmbed(
+        embed_overrides={question: vec},
+        extract_responses=[
+            # Primary: well-formed SQL but matches nothing.
+            GeneratedSQL(sql="SELECT id FROM entities WHERE canonical_name='Alice S.'"),
+            # Retry: canonicalised, hits the alice row.
+            GeneratedSQL(sql=f"SELECT id FROM entities WHERE id='{alice.id}'"),
+        ],
+    )
+
+    result = run_text2sql(conn, question, fake)
+
+    assert result.succeeded
+    assert result.rewritten_question == "Alice Smith のタスク"
+    assert {row["id"] for row in result.rows} == {alice.id}
 
 
-def test_run_text2sql_skips_embed_when_resolution_disabled(conn) -> None:
-    """When resolution is disabled, no embed call fires and the prompt has
-    no candidates section."""
-    fake = FakeLLM(extract_responses=[GeneratedSQL(sql="SELECT id FROM documents")])
-    run_text2sql(conn, "メモを出して", fake, resolution_enabled=False)
+def test_run_text2sql_no_retry_when_resolution_disabled(conn) -> None:
+    """``resolution_enabled=False`` → primary error, no resolve, no retry."""
+    _seed_alice(conn)
+    fake = FakeLLM(
+        extract_responses=[GeneratedSQL(sql="SELECT bogus FROM entities")],
+    )
 
-    prompt_text, _schema = fake.calls_extract[-1]
-    assert "# 解決済みエンティティ候補" not in prompt_text
-    # No embed should have happened.
+    result = run_text2sql(conn, "Alice S. の件", fake, resolution_enabled=False)
+
+    assert result.error is not None
+    assert "sqlite error" in result.error
     assert fake.calls_embed == []
+    assert len(fake.calls_extract) == 1
+
+
+def test_run_text2sql_no_retry_when_no_candidates_found(conn) -> None:
+    """``resolve_mentions`` returns empty → no retry, primary error stands."""
+    # No entities seeded; KNN against empty entities_vec returns nothing.
+    fake = FakeLLM(
+        extract_responses=[GeneratedSQL(sql="SELECT bogus FROM entities")],
+    )
+
+    result = run_text2sql(conn, "Alice S. の件", fake)
+
+    assert result.error is not None
+    # Embed was attempted (resolve_mentions ran) but no extract retry happened.
+    assert len(fake.calls_extract) == 1
+
+
+def test_run_text2sql_keeps_primary_when_retry_is_no_improvement(conn) -> None:
+    """If the retry also errors and primary had rows-y partial state, primary
+    wins. (Symmetric guard.) Concretely: primary returns 0 rows, retry also
+    errors → ``_is_better`` rejects the retry."""
+    alice, vec = _seed_alice(conn)
+    question = "Alice S. のタスク"
+
+    KeyedEmbed = _make_keyed_embed_llm()
+    fake = KeyedEmbed(
+        embed_overrides={question: vec},
+        extract_responses=[
+            # Primary: succeeds, 0 rows (triggers retry).
+            GeneratedSQL(sql="SELECT id FROM entities WHERE canonical_name='Alice S.'"),
+            # Retry: errors out.
+            GeneratedSQL(sql="SELECT bogus FROM entities"),
+        ],
+    )
+
+    result = run_text2sql(conn, question, fake)
+
+    # Retry failed; primary (succeeded, empty) is what's returned.
+    assert result.succeeded
+    assert result.rows == []
+    assert result.rewritten_question is None
+    assert result.question == question
 
 
 # ---------------------------------------------------------------------------

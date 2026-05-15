@@ -167,14 +167,15 @@ def test_agent_can_traverse_relations_via_text_to_sql(conn) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Query-time mention resolution (single-stage, KNN-only)
+# Query-time mention resolution (retry-on-failure fallback)
 # ---------------------------------------------------------------------------
-def test_agent_resolves_surface_form_mention_via_text_to_sql(conn) -> None:
-    """A question whose embedding aligns with a seeded entity's vector
-    must produce a SQL prompt with the resolved candidates section
-    populated — so the agent writes ``entities.id = '<id>'`` instead of
-    ``LIKE``. ``_KeyedEmbedLLM`` pins the embed map so the KNN result
-    is deterministic."""
+def test_agent_resolves_alias_via_text_to_sql_retry(conn) -> None:
+    """An alias surface form ("Alice S.") that doesn't match any
+    ``canonical_name`` row directly should trigger the retry path:
+    primary returns 0 rows → ``resolve_mentions`` KNN-finds Alice Smith
+    → question is canonicalised → retry SQL uses ``canonical_name =
+    'Alice Smith'`` and matches the row. ``_KeyedEmbedLLM`` pins the
+    embed vector so the KNN hit is deterministic."""
     from dataclasses import dataclass, field
 
     from docdb.llm.fake import _hash_to_unit_vector
@@ -203,22 +204,31 @@ def test_agent_resolves_surface_form_mention_via_text_to_sql(conn) -> None:
     )
     store.upsert_entity(alice, embedding=vec)
 
-    question = "Aliceのタスクを見せて"
+    question = "Alice S. のタスクを見せて"
     fake = _KeyedEmbedLLM(
         embed_overrides={question: vec},
         chat_responses=[
             StubChatCompletion.tool(
                 [("c1", "text_to_sql", json.dumps({"question": question}))]
             ),
-            StubChatCompletion.text("Alice にタスクは紐付いていません。"),
+            StubChatCompletion.text("Alice Smith にタスクは紐付いていません。"),
         ],
         extract_responses=[
+            # Primary: LLM copies the alias literal from the question → 0 rows.
             GeneratedSQL(
                 sql=(
                     "SELECT canonical_name FROM entities "
-                    f"WHERE id = '{alice.id}'"
+                    "WHERE canonical_name = 'Alice S.'"
                 ),
-                reasoning="filter by resolved entity_id from the candidates section",
+                reasoning="naive alias lookup",
+            ),
+            # Retry: question canonicalised to 'Alice Smith ...', SQL hits.
+            GeneratedSQL(
+                sql=(
+                    "SELECT canonical_name FROM entities "
+                    "WHERE canonical_name = 'Alice Smith'"
+                ),
+                reasoning="canonical name from rewritten question",
             ),
         ],
     )
@@ -227,21 +237,15 @@ def test_agent_resolves_surface_form_mention_via_text_to_sql(conn) -> None:
     result = agent.run(question)
 
     assert result.succeeded, result.error
-    # The SQL the LLM produced — note the test scripts it, but the wiring
-    # assertion below proves the prompt actually carried the candidate so
-    # this SQL form is reachable in real usage.
     sql_call = next(t for t in result.trace if t.tool == "text_to_sql")
-    assert alice.id in sql_call.result_preview
-    assert "LIKE" not in sql_call.result_preview
-
-    # Wiring assertion: the SQL-generation prompt must have included the
-    # resolved-candidates section with Alice's id and the directive to use
-    # entities.id instead of LIKE.
-    sql_prompt, _schema = fake.calls_extract[-1]
-    assert "# 解決済みエンティティ候補" in sql_prompt
-    assert alice.id in sql_prompt
-    assert "Alice Smith" in sql_prompt
-    assert "entities.id" in sql_prompt
+    # The agent saw the rewritten question signal in the tool result.
+    assert "rewritten_question" in sql_call.result_preview
+    assert "Alice Smith" in sql_call.result_preview
+    # Retry actually ran — two extract calls.
+    assert len(fake.calls_extract) == 2
+    # The retry prompt was assembled with the canonicalised question.
+    retry_prompt, _schema = fake.calls_extract[1]
+    assert "Alice Smith のタスクを見せて" in retry_prompt
 
 
 # ---------------------------------------------------------------------------

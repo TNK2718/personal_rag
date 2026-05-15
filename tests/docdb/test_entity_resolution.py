@@ -15,7 +15,11 @@ from dataclasses import dataclass, field
 from docdb.ingestion.store import DocumentStore
 from docdb.llm.fake import FakeLLM, _hash_to_unit_vector
 from docdb.models import Entity, entity_id_for
-from docdb.search.entity_resolution import ResolvedCandidate, resolve_mentions
+from docdb.search.entity_resolution import (
+    ResolvedCandidate,
+    canonicalize_mentions_in_question,
+    resolve_mentions,
+)
 
 
 def _unit_vec(slot: int, dim: int = 1024) -> list[float]:
@@ -182,3 +186,84 @@ def test_resolve_mentions_returns_empty_when_no_entities(conn) -> None:
     )
 
     assert out == []
+
+
+# ---------------------------------------------------------------------------
+# canonicalize_mentions_in_question
+# ---------------------------------------------------------------------------
+def _alice() -> ResolvedCandidate:
+    return ResolvedCandidate(
+        entity_id="e-alice",
+        canonical_name="Alice Smith",
+        type_slug="person",
+        aliases=["Alice S."],
+        distance=0.4,
+    )
+
+
+def _bob() -> ResolvedCandidate:
+    return ResolvedCandidate(
+        entity_id="e-bob",
+        canonical_name="Bob Tanaka",
+        type_slug="person",
+        aliases=["Bob T.", "ボブ"],
+        distance=0.5,
+    )
+
+
+def test_canonicalize_noop_when_canonical_already_in_question() -> None:
+    assert (
+        canonicalize_mentions_in_question(
+            "Alice Smith のタスク", [_alice()]
+        )
+        == "Alice Smith のタスク"
+    )
+
+
+def test_canonicalize_replaces_alias_inplace() -> None:
+    assert (
+        canonicalize_mentions_in_question(
+            "Alice S. のタスク", [_alice()]
+        )
+        == "Alice Smith のタスク"
+    )
+
+
+def test_canonicalize_appends_fallback_hint_when_no_substring_match() -> None:
+    """``アリス`` doesn't substring-match the canonical or any alias →
+    append ``(関連: Alice Smith)`` at the end so the canonical still
+    shows up in the question text."""
+    out = canonicalize_mentions_in_question(
+        "アリスのタスク見せて", [_alice()]
+    )
+    assert out == "アリスのタスク見せて (関連: Alice Smith)"
+
+
+def test_canonicalize_handles_mixed_substring_and_fuzzy_candidates() -> None:
+    """Alice's alias substring-matches (in-place rewrite); Bob is a fuzzy
+    hit (appended). Both happen in the same call."""
+    out = canonicalize_mentions_in_question(
+        "Alice S. とサトシの関係", [_alice(), _bob()]
+    )
+    assert out == "Alice Smith とサトシの関係 (関連: Bob Tanaka)"
+
+
+def test_canonicalize_no_candidates_returns_question_unchanged() -> None:
+    assert canonicalize_mentions_in_question("anything", []) == "anything"
+
+
+def test_canonicalize_is_idempotent() -> None:
+    once = canonicalize_mentions_in_question(
+        "Alice S. のタスク", [_alice()]
+    )
+    twice = canonicalize_mentions_in_question(once, [_alice()])
+    assert once == twice
+
+
+def test_canonicalize_dedupes_repeated_candidate_ids() -> None:
+    """Defensive: if the candidate list happens to contain duplicates,
+    splice once."""
+    out = canonicalize_mentions_in_question(
+        "Alice S. のタスク", [_alice(), _alice()]
+    )
+    assert out == "Alice Smith のタスク"
