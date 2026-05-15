@@ -20,6 +20,7 @@ import pytest
 
 from docdb.agent.toolbox import Toolbox
 from docdb.llm.fake import FakeLLM
+from docdb.search.text2sql import GeneratedSQL
 
 from tests.docdb.fixtures import SAMPLE_DOCS, SAMPLE_ENTITIES
 
@@ -172,6 +173,52 @@ def test_execute_readonly_sql_rejects_unsafe(toolbox: Toolbox) -> None:
     assert inv.succeeded  # no exception
     assert "error" in inv.result
     assert "unsafe sql" in inv.result["error"]
+
+
+# ---------------------------------------------------------------------------
+# text_to_sql
+# ---------------------------------------------------------------------------
+def test_text_to_sql_dispatches_to_run_text2sql(populated_db) -> None:
+    llm = FakeLLM(
+        extract_responses=[
+            GeneratedSQL(
+                sql="SELECT id FROM documents WHERE doc_type='memo'",
+                reasoning="filter memos by doc_type",
+            )
+        ]
+    )
+    tb = Toolbox(populated_db, llm)
+    inv = tb.invoke("text_to_sql", {"question": "メモだけ一覧して"})
+    assert inv.succeeded
+    assert inv.result["error"] is None
+    assert inv.result["reasoning"] == "filter memos by doc_type"
+    ids = {row["id"] for row in inv.result["rows"]}
+    assert ids == {SAMPLE_DOCS[0].id, SAMPLE_DOCS[4].id}
+
+
+def test_text_to_sql_surfaces_unsafe_sql_as_error(populated_db) -> None:
+    llm = FakeLLM(extract_responses=[GeneratedSQL(sql="DROP TABLE documents")])
+    tb = Toolbox(populated_db, llm)
+    inv = tb.invoke("text_to_sql", {"question": "drop everything"})
+    assert inv.succeeded  # the tool itself didn't raise
+    assert inv.result["error"] is not None
+    assert "unsafe sql" in inv.result["error"]
+    assert inv.result["rows"] == []
+
+
+def test_text_to_sql_surfaces_sqlite_error(populated_db) -> None:
+    # Column 'body' doesn't exist on the documents table — the same trap the
+    # agent fell into before this tool was wired up.
+    llm = FakeLLM(
+        extract_responses=[
+            GeneratedSQL(sql="SELECT id, body FROM documents WHERE body LIKE '%x%'")
+        ]
+    )
+    tb = Toolbox(populated_db, llm)
+    inv = tb.invoke("text_to_sql", {"question": "find x"})
+    assert inv.succeeded
+    assert inv.result["error"] is not None
+    assert "sqlite error" in inv.result["error"]
 
 
 # ---------------------------------------------------------------------------

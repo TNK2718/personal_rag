@@ -1,15 +1,14 @@
 from __future__ import annotations
 
 
-def test_defaults_use_qwen3_4b_for_both_extract_and_agent() -> None:
-    # The default agent model is the safe side (4b) so memory-constrained
-    # machines do not implicitly load two models. Switching to qwen3:8b is
-    # opt-in via DOCDB_AGENT_MODEL.
+def test_defaults_use_granite4_1_for_both_extract_and_agent() -> None:
+    # Default is granite4.1:3b for both extraction and the agent; a larger
+    # model can be opted into via DOCDB_AGENT_MODEL / DOCDB_EXTRACT_MODEL.
     from docdb.config import Settings
 
     s = Settings(_env_file=None)
-    assert s.extract_model == "qwen3:4b"
-    assert s.agent_model == "qwen3:4b"
+    assert s.extract_model == "granite4.1:3b"
+    assert s.agent_model == "granite4.1:3b"
     assert s.embed_model == "bge-m3"
     assert s.embed_dim == 1024
 

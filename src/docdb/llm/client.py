@@ -10,8 +10,8 @@ exposes three operations:
 * ``embed``: vector embeddings via the configured ``embed_model``.
 
 The ``keep_alive`` setting is forwarded through ``extra_body`` so
-qwen3 stays warm between successive requests (Ollama-specific knob
-that survives the OpenAI compatibility layer).
+the local model stays warm between successive requests
+(Ollama-specific knob that survives the OpenAI compatibility layer).
 """
 
 from __future__ import annotations

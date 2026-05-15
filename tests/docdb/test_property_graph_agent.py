@@ -19,9 +19,21 @@ from docdb.agent.loop import SearchAgent
 from docdb.agent.toolbox import Toolbox
 from docdb.ingestion.store import DocumentStore
 from docdb.llm.fake import FakeLLM, StubChatCompletion
-from docdb.llm.prompts import AGENT_SYSTEM, DOCDB_SCHEMA_SUMMARY
+from docdb.llm.prompts import (
+    AGENT_PROMPT_MAX_BYTES,
+    AGENT_SYSTEM,
+    AGENT_SYSTEM_BASE,
+    DOCDB_SCHEMA_SUMMARY,
+    build_agent_system_prompt,
+)
 from docdb.models import Entity, entity_id_for
 from docdb.search.text2sql import ALLOWED_TABLES
+from docdb.typing.registry import (
+    EntityTypeDef,
+    RelationTypeDef,
+    list_entity_types,
+    list_relation_types,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +147,7 @@ def test_agent_system_lists_property_graph_tools() -> None:
     assert "list_entity_types" in AGENT_SYSTEM
     assert "search_entities" in AGENT_SYSTEM
     assert "search_relations" in AGENT_SYSTEM
+    assert "text_to_sql" in AGENT_SYSTEM
     # And it must NOT mention the removed Stage-2 ``list_todos`` tool.
     assert "list_todos" not in AGENT_SYSTEM
 
@@ -142,10 +155,77 @@ def test_agent_system_lists_property_graph_tools() -> None:
 def test_toolbox_specs_match_agent_system_advertised_tools(conn) -> None:
     toolbox = Toolbox(conn, FakeLLM())
     declared = {spec.name for spec in toolbox.specs()}
-    assert {"list_entity_types", "search_entities", "search_relations"}.issubset(
-        declared
-    )
+    assert {
+        "list_entity_types",
+        "search_entities",
+        "search_relations",
+        "text_to_sql",
+    }.issubset(declared)
     assert "list_todos" not in declared
+
+
+# ---------------------------------------------------------------------------
+# build_agent_system_prompt: dynamic type catalogue
+# ---------------------------------------------------------------------------
+class TestBuildAgentSystemPrompt:
+    def test_default_cap_is_20kb(self) -> None:
+        assert AGENT_PROMPT_MAX_BYTES == 20_000
+
+    def test_agent_system_alias_is_back_compat(self) -> None:
+        # External callers import AGENT_SYSTEM directly. It must stay equal to
+        # the base string after the rename.
+        assert AGENT_SYSTEM == AGENT_SYSTEM_BASE
+
+    def test_empty_registry_returns_base_only(self) -> None:
+        prompt = build_agent_system_prompt([], [])
+        # The base instructions are preserved verbatim.
+        assert AGENT_SYSTEM_BASE in prompt
+        # Catalogue headers only show up when types exist.
+        assert "登録済みの entity 型" not in prompt
+        assert "登録済みの relation 型" not in prompt
+
+    def test_catalogue_lists_entity_slug_and_label(self, conn: sqlite3.Connection) -> None:
+        entity_types = list_entity_types(conn)
+        prompt = build_agent_system_prompt(entity_types, [])
+        assert "登録済みの entity 型" in prompt
+        for t in entity_types:
+            assert f"`{t.slug}`" in prompt
+            assert t.label in prompt
+
+    def test_catalogue_omits_field_details(self, conn: sqlite3.Connection) -> None:
+        # The agent prompt is intentionally lean: no fields_schema dump.
+        task = next(t for t in list_entity_types(conn) if t.slug == "task")
+        prompt = build_agent_system_prompt([task], [])
+        # task has 'status' field on the extraction side, but the agent prompt
+        # should not enumerate per-field specs (keeps the prompt small).
+        assert "status (enum" not in prompt
+        assert "due_date (date" not in prompt
+
+    def test_relation_catalogue_shows_endpoints(self, conn: sqlite3.Connection) -> None:
+        entity_types = list_entity_types(conn)
+        relation_types = list_relation_types(conn)
+        if not relation_types:
+            pytest.skip("no relation types seeded in this fixture")
+        prompt = build_agent_system_prompt(entity_types, relation_types)
+        for t in relation_types:
+            assert f"`{t.slug}`" in prompt
+
+    def test_relations_skipped_when_no_entity_types(self) -> None:
+        rel = RelationTypeDef.model_validate(
+            {"slug": "assigned_to", "label": "担当", "fields_schema": []}
+        )
+        prompt = build_agent_system_prompt([], [rel])
+        # Without any entity types the relation catalogue is irrelevant noise.
+        assert "assigned_to" not in prompt
+
+    def test_byte_cap_truncates_rather_than_crashing(self, conn: sqlite3.Connection) -> None:
+        entity_types = list_entity_types(conn)
+        relation_types = list_relation_types(conn)
+        prompt = build_agent_system_prompt(
+            entity_types, relation_types, max_bytes=2_500
+        )
+        assert len(prompt.encode("utf-8")) <= 2_700
+        assert "省略" in prompt
 
 
 # ---------------------------------------------------------------------------

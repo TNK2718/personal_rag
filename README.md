@@ -36,7 +36,7 @@ uv sync --extra test --extra ingestion
 ### 2. Ollama (ローカル LLM / embedding)
 
 ```bash
-ollama pull qwen3:4b      # agent / extraction
+ollama pull granite4.1:3b  # agent / extraction (default)
 ollama pull bge-m3        # embeddings (1024 dims)
 ```
 

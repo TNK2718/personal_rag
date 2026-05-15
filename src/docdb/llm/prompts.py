@@ -24,6 +24,7 @@ from docdb.typing.registry import EntityTypeDef, RelationTypeDef
 
 
 EXTRACTION_PROMPT_MAX_BYTES = 30_000
+AGENT_PROMPT_MAX_BYTES = 20_000
 
 
 EXTRACTION_SYSTEM_BASE = (
@@ -248,20 +249,91 @@ def build_text2sql_user_prompt(question: str) -> str:
 # ---------------------------------------------------------------------------
 # Search agent
 # ---------------------------------------------------------------------------
-AGENT_SYSTEM = (
+AGENT_SYSTEM_BASE = (
     "あなたは個人 Markdown メモに対する検索エージェントです。\n"
     "提供されたツールのみを使って情報を探し、ユーザーの質問に日本語で簡潔に答えます。\n"
     "\n"
+    "この個人ノートは property graph として整理されており、人物・組織・タスク・場所などは\n"
+    "事前に entity として抽出され、`type_slug` でカテゴリ化されている。質問に固有名詞や\n"
+    "型ベースの条件が含まれる場合、全文検索より entity 系ツールの方が速く正確に辿れる。\n"
+    "\n"
     "進め方:\n"
-    "1. まず `search_documents` で広く検索する (3 文字以上の語を使う; 日本語FTS5の制約)。\n"
-    "2. 言い換えや同義語が重要な質問では `hybrid=true` を渡す。\n"
-    "3. 関連文書が見つかったら `get_document` で本文を確認する。\n"
-    "4. 集計や横断条件には `execute_readonly_sql` を使う (SELECT のみ実行可能)。\n"
-    "5. 人物・組織・タスクなど型に依存する質問は `list_entity_types` で何が登録されているか確認してから `search_entities` を呼ぶ。\n"
-    "6. エンティティ間の関係は `search_relations` で辿る。\n"
+    "1. 質問に **固有名詞** (人名・組織名・カタカナ語・略号・カギカッコ付き固有名詞など)\n"
+    "   が含まれるなら、まず `search_entities` で該当 entity を引く。\n"
+    "   後ろに示す entity 型カタログから妥当な `type_slug` を絞ると精度が上がる。\n"
+    "   見つかったら `get_entity_documents` で言及ドキュメントを取得する。\n"
+    "2. 質問が **型ベース** (例: 「未完了のタスクは？」「最近の会議は？」) なら、\n"
+    "   `search_entities` (`type_slug` 指定) や、件数集計が必要なら `execute_readonly_sql` を使う。\n"
+    "3. **エンティティ間の関係** (担当者・所属・親子) を辿る質問は `search_relations` を使う。\n"
+    "4. 上記で当たりが付かないか、自由語句での意味検索が必要なら `search_documents` を使う\n"
+    "   (3 文字以上; 言い換えに弱いと感じたら `hybrid=true`)。本文確認は `get_document`。\n"
+    "5. 横断条件・集計・LIKE 検索・スキーマ依存のフィルタなど SQL が要る場面では\n"
+    "   `text_to_sql` を使う (質問文をそのまま渡せばスキーマ込みで SELECT を生成して実行する)。\n"
+    "   特定の SQL を自分で書きたいときだけ `execute_readonly_sql` を使う\n"
+    "   (テーブル: documents(id, title, raw_text, summary, doc_type, …)、\n"
+    "   entities(id, type_slug, canonical_name, fields JSON, …)、relations(id, type_slug,\n"
+    "   source_entity_id, target_entity_id, …)。`body` ではなく `raw_text`)。\n"
+    "6. 型カタログを最新化したくなったら `list_entity_types` / `list_relation_types` を呼ぶ\n"
+    "   (通常は下のカタログで十分)。\n"
     "\n"
     "ルール:\n"
     "- ツール結果に書かれていない情報を捏造しない。資料に存在しなければ「分かりません」と答える。\n"
     "- 回答末尾に出典を `[doc:document_id]` の形式で列挙する。\n"
     "- 不要なツール呼び出しを避ける。十分な情報が揃ったら速やかに最終回答を返す。"
 )
+
+# Back-compat: external callers and existing tests import AGENT_SYSTEM directly.
+AGENT_SYSTEM = AGENT_SYSTEM_BASE
+
+
+def build_agent_system_prompt(
+    entity_types: list[EntityTypeDef],
+    relation_types: list[RelationTypeDef],
+    *,
+    max_bytes: int = AGENT_PROMPT_MAX_BYTES,
+) -> str:
+    """Assemble the agent system prompt with the live type catalogue appended.
+
+    The agent only needs slug / label / short description to steer
+    ``search_entities`` and ``search_relations`` toward the right ``type_slug``.
+    Field schemas and extraction hints (used on the extraction side) are
+    deliberately omitted to keep the prompt small at inference time.
+
+    Hard-capped at ``max_bytes`` UTF-8 bytes; if the assembled prompt grows
+    past the cap, trailing catalogue entries are dropped (same approach as
+    ``build_extraction_system_prompt``).
+    """
+    parts: list[str] = [AGENT_SYSTEM_BASE, ""]
+
+    if entity_types:
+        parts.append("# 登録済みの entity 型 (slug : label)")
+        for t in entity_types:
+            parts.append(_render_entity_type_lite(t))
+        parts.append("")
+
+    if relation_types and entity_types:
+        parts.append("# 登録済みの relation 型 (slug : label, source → target)")
+        for t in relation_types:
+            parts.append(_render_relation_type_lite(t))
+        parts.append("")
+
+    assembled = "\n".join(parts)
+    if len(assembled.encode("utf-8")) <= max_bytes:
+        return assembled
+
+    return _truncate_to_fit(parts, max_bytes)
+
+
+def _render_entity_type_lite(t: EntityTypeDef) -> str:
+    head = f"- `{t.slug}` : {t.label}"
+    if t.description:
+        head += f" — {t.description}"
+    return head
+
+
+def _render_relation_type_lite(t: RelationTypeDef) -> str:
+    endpoints = f"{t.source_type_slug or 'any'} → {t.target_type_slug or 'any'}"
+    head = f"- `{t.slug}` : {t.label} ({endpoints})"
+    if t.description:
+        head += f" — {t.description}"
+    return head
