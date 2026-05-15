@@ -14,6 +14,8 @@ from __future__ import annotations
 
 import pytest
 
+from docdb.ingestion.store import DocumentStore
+from docdb.models import Entity, entity_id_for
 from docdb.search.direct import (
     count_documents,
     find_similar,
@@ -24,6 +26,7 @@ from docdb.search.direct import (
     search,
     search_by_embedding,
     search_entities,
+    search_entities_by_embedding,
 )
 
 from tests.docdb.fixtures import SAMPLE_DOCS, SAMPLE_ENTITIES, SAMPLE_TAGS
@@ -161,3 +164,55 @@ def test_get_entity_documents_returns_linked(populated_db) -> None:
     tanaka = SAMPLE_ENTITIES[0]
     results = get_entity_documents(populated_db, tanaka.id)
     assert {d.id for d in results} == {SAMPLE_DOCS[1].id}
+
+
+# ---------------------------------------------------------------------------
+# search_entities_by_embedding — used by the ingest-time dedup pipeline.
+# Each test inserts entities with controlled, near-orthogonal embeddings so
+# the KNN ordering is unambiguous.
+# ---------------------------------------------------------------------------
+def _unit_vec(slot: int, dim: int = 1024) -> list[float]:
+    v = [0.0] * dim
+    v[slot] = 1.0
+    return v
+
+
+def test_search_entities_by_embedding_returns_nearest_same_type(conn) -> None:
+    store = DocumentStore(conn)
+    a = Entity(id=entity_id_for("person", "Alice"), type_slug="person", canonical_name="Alice")
+    b = Entity(id=entity_id_for("person", "Bob"), type_slug="person", canonical_name="Bob")
+    store.upsert_entity(a, embedding=_unit_vec(0))
+    store.upsert_entity(b, embedding=_unit_vec(1))
+
+    hits = search_entities_by_embedding(conn, _unit_vec(0), type_slug="person", top_k=1)
+
+    assert len(hits) == 1
+    assert hits[0][0] == a.id
+    assert hits[0][1] == pytest.approx(0.0, abs=1e-5)
+
+
+def test_search_entities_by_embedding_filters_by_type_slug(conn) -> None:
+    """vec0 has no native pre-filter; the JOIN must drop wrong-type rows
+    even when they're the closest in vector space."""
+    store = DocumentStore(conn)
+    a_person = Entity(
+        id=entity_id_for("person", "X"), type_slug="person", canonical_name="X"
+    )
+    a_task = Entity(
+        id=entity_id_for("task", "X"),
+        type_slug="task",
+        canonical_name="X",
+        fields={"status": "pending", "priority": "medium"},
+    )
+    # Both upserted with the SAME embedding — type-filter is the only thing
+    # that differentiates them.
+    store.upsert_entity(a_person, embedding=_unit_vec(0))
+    store.upsert_entity(a_task, embedding=_unit_vec(0))
+
+    hits = search_entities_by_embedding(conn, _unit_vec(0), type_slug="person", top_k=2)
+
+    assert [h[0] for h in hits] == [a_person.id]
+
+
+def test_search_entities_by_embedding_empty_when_no_entities(conn) -> None:
+    assert search_entities_by_embedding(conn, _unit_vec(0), type_slug="person") == []

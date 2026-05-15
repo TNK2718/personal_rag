@@ -327,6 +327,33 @@ def search_relations(
 # ---------------------------------------------------------------------------
 # Vector helpers (used by tests / future hybrid scoring)
 # ---------------------------------------------------------------------------
+def search_entities_by_embedding(
+    conn: sqlite3.Connection,
+    embedding: Iterable[float],
+    *,
+    type_slug: str,
+    top_k: int = 1,
+) -> list[tuple[str, float]]:
+    """KNN over ``entities_vec`` restricted to one entity type.
+
+    Returns ``(entity_id, distance)`` pairs in ascending-distance order.
+    vec0 has no native pre-filter, so we over-fetch and let the JOIN
+    against ``entities`` peel out wrong-type rows; ``top_k * 4`` is a
+    generous cushion for typical type selectivity.
+    """
+    knn_k = max(top_k * 4, top_k)
+    rows = conn.execute(
+        "SELECT v.entity_id, v.distance "
+        "FROM entities_vec AS v "
+        "JOIN entities     AS e ON e.id = v.entity_id "
+        "WHERE v.embedding MATCH ? AND v.k = ? AND e.type_slug = ? "
+        "ORDER BY v.distance "
+        "LIMIT ?",
+        (pack_embedding(embedding), knn_k, type_slug, int(top_k)),
+    ).fetchall()
+    return [(r["entity_id"], float(r["distance"])) for r in rows]
+
+
 def search_by_embedding(
     conn: sqlite3.Connection,
     embedding: Iterable[float],

@@ -165,6 +165,47 @@ class DocumentStore:
             if embedding is not None:
                 self._upsert_vec("entities_vec", "entity_id", entity.id, embedding)
 
+    def merge_aliases_into_entity(
+        self, entity_id: str, new_aliases: Iterable[str]
+    ) -> None:
+        """Push ``new_aliases`` onto an existing entity's aliases list.
+
+        Used by the ingest pipeline when fuzzy-match dedup folds a
+        freshly-extracted entity into a pre-existing one: the existing
+        canonical_name + fields stay put, but the new surface form is
+        recorded as an alias and the FTS shadow is refreshed so future
+        ``entities_fts`` lookups find both spellings.
+        """
+        row = self.conn.execute(
+            "SELECT canonical_name, aliases, description, fields "
+            "FROM entities WHERE id = ?",
+            (entity_id,),
+        ).fetchone()
+        if row is None:
+            return
+        existing = json.loads(row["aliases"] or "[]")
+        seen = {a.casefold() for a in existing}
+        for alias in new_aliases:
+            if not alias:
+                continue
+            key = alias.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            existing.append(alias)
+        with self.conn:
+            self.conn.execute(
+                "UPDATE entities SET aliases = ?, updated_ts = ? WHERE id = ?",
+                (json.dumps(existing, ensure_ascii=False), now_iso(), entity_id),
+            )
+            self._refresh_entity_searchable_text(
+                entity_id,
+                row["canonical_name"],
+                existing,
+                row["description"],
+                json.loads(row["fields"] or "{}"),
+            )
+
     def delete_entity(self, entity_id: str) -> bool:
         with self.conn:
             cur = self.conn.execute("DELETE FROM entities WHERE id = ?", (entity_id,))

@@ -183,6 +183,45 @@ def test_upsert_entity_refreshes_search_shadow(conn) -> None:
     assert "デザイナー" in row["searchable_text"]
 
 
+def test_merge_aliases_into_entity_unions_and_refreshes_shadow(conn) -> None:
+    """The dedup pipeline calls this when folding a new surface form
+    into an existing entity. Existing canonical_name / fields stay put,
+    new alias appears in both the aliases JSON and the FTS shadow."""
+    store = DocumentStore(conn)
+    e = Entity(
+        id=entity_id_for("person", "Alice"),
+        type_slug="person",
+        canonical_name="Alice",
+        aliases=["A"],
+    )
+    store.upsert_entity(e)
+
+    store.merge_aliases_into_entity(e.id, ["Alice S.", "a", "ALICE S."])
+
+    row = conn.execute(
+        "SELECT canonical_name, aliases FROM entities WHERE id = ?", (e.id,)
+    ).fetchone()
+    assert row["canonical_name"] == "Alice"  # canonical unchanged
+    aliases = json.loads(row["aliases"])
+    assert "A" in aliases  # original preserved
+    assert "Alice S." in aliases  # new surface form folded in
+    # Case-insensitive dedup keeps only one of "a"/"A" and "Alice S."/"ALICE S.".
+    lowered = [a.casefold() for a in aliases]
+    assert len(lowered) == len(set(lowered))
+
+    searchable = conn.execute(
+        "SELECT searchable_text FROM entities_search WHERE entity_id = ?", (e.id,)
+    ).fetchone()["searchable_text"]
+    assert "Alice S." in searchable
+
+
+def test_merge_aliases_into_entity_noop_when_id_missing(conn) -> None:
+    """Calling on a non-existent id is silent — the pipeline should not
+    have to pre-check existence."""
+    store = DocumentStore(conn)
+    store.merge_aliases_into_entity("nonexistent", ["foo"])  # no raise
+
+
 def test_delete_entity_removes_row_and_search_shadow(conn) -> None:
     store = DocumentStore(conn)
     e = Entity(

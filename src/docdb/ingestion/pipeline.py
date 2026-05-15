@@ -32,7 +32,12 @@ from pathlib import Path
 from typing import Iterator, Literal
 
 from docdb.ingestion.extractor import Extractor
-from docdb.ingestion.normalizer import normalize_extraction
+from docdb.ingestion.normalizer import (
+    DocumentEntityLink,
+    DocumentRelationLink,
+    NormalizedExtraction,
+    normalize_extraction,
+)
 from docdb.ingestion.parser import ParsedDocument, Parser
 from docdb.ingestion.store import DocumentStore
 from docdb.llm.base import LLMProtocol
@@ -40,10 +45,13 @@ from docdb.models import (
     Document,
     DocType,
     Language,
+    Relation,
     SourceType,
     document_id_for,
     content_hash_for,
+    relation_id_for,
 )
+from docdb.search.direct import search_entities_by_embedding
 from docdb.typing.deterministic import run_for_types
 from docdb.typing.registry import (
     list_entity_types,
@@ -74,6 +82,9 @@ class IngestionPipeline:
     parser: Parser = field(default_factory=Parser)
     extractor: Extractor | None = None
     extract_relations: bool = True
+    # Fuzzy entity dedup at ingest. See docdb.config.Settings for tuning.
+    entity_dedup_enabled: bool = True
+    entity_dedup_distance: float = 0.35
 
     def __post_init__(self) -> None:
         # The registry is read once at construction. Tests that mutate the
@@ -204,13 +215,47 @@ class IngestionPipeline:
                 source=link.source,
             )
 
+        # Fuzzy entity dedup — embed each newly-extracted entity, find an
+        # existing same-type entity within distance threshold, fold the new
+        # surface form into the existing row's aliases, and remap link /
+        # relation references so the downstream writes target the merged
+        # entity. On embed failure we degrade gracefully: keep the unique-
+        # constraint dedup that was always there.
+        entity_embeddings: dict[str, list[float]] = {}
+        merge_targets: set[str] = set()  # existing entity ids merged into
+        dedup_error: str | None = None
+        if self.entity_dedup_enabled and norm.entities:
+            try:
+                entity_embeddings = self._embed_entities(norm.entities)
+            except Exception as exc:  # noqa: BLE001
+                dedup_error = (
+                    f"entity embed failed: {type(exc).__name__}: {exc}"
+                )
+                entity_embeddings = {}
+
+            if entity_embeddings:
+                remap, merged_canonical = self._compute_entity_remap(
+                    norm.entities, entity_embeddings
+                )
+                if remap:
+                    for existing_id, surface_forms in merged_canonical.items():
+                        self.store.merge_aliases_into_entity(
+                            existing_id, surface_forms
+                        )
+                        merge_targets.add(existing_id)
+                    norm = _apply_entity_remap(norm, remap)
+                    for merged_out_id in remap:
+                        entity_embeddings.pop(merged_out_id, None)
+
         # Entities — write each through the store so field validation runs.
         per_type_counts: dict[str, int] = {}
         validation_errors: list[str] = []
-        accepted_entity_ids: set[str] = set()
+        accepted_entity_ids: set[str] = set(merge_targets)
         for ent in norm.entities:
             try:
-                self.store.upsert_entity(ent)
+                self.store.upsert_entity(
+                    ent, embedding=entity_embeddings.get(ent.id)
+                )
             except ValueError as exc:
                 validation_errors.append(f"entity {ent.canonical_name!r}: {exc}")
                 continue
@@ -227,13 +272,16 @@ class IngestionPipeline:
                 contexts=link.contexts,
             )
 
-        # Relations — drop ones referencing entities that didn't make it.
+        # Relations — drop ones referencing entities that didn't make it,
+        # and self-loops introduced by the dedup remap.
         relations_added = 0
         for rel in norm.relations:
             if (
                 rel.source_entity_id not in accepted_entity_ids
                 or rel.target_entity_id not in accepted_entity_ids
             ):
+                continue
+            if rel.source_entity_id == rel.target_entity_id:
                 continue
             try:
                 self.store.upsert_relation(rel)
@@ -251,6 +299,8 @@ class IngestionPipeline:
         notes: list[str] = []
         if outcome.error:
             notes.append(outcome.error)
+        if dedup_error:
+            notes.append(dedup_error)
         notes.extend(validation_errors)
         for drop in norm.drops:
             notes.append(f"dropped {drop.kind}: {drop.reason}")
@@ -264,6 +314,56 @@ class IngestionPipeline:
             relations_added=relations_added,
             extraction_error="; ".join(notes) if notes else None,
         )
+
+    # ------------------------------------------------------------------
+    # Entity dedup helpers
+    # ------------------------------------------------------------------
+    def _embed_entities(self, entities) -> dict[str, list[float]]:
+        """Batch-embed entities; return {entity_id: vector}.
+
+        Empty input → empty dict, no LLM call.
+        """
+        if not entities:
+            return {}
+        ids = [e.id for e in entities]
+        texts = [_entity_embedding_text(e) for e in entities]
+        vectors = self.llm.embed(texts)
+        return dict(zip(ids, vectors))
+
+    def _compute_entity_remap(
+        self,
+        entities,
+        embeddings: dict[str, list[float]],
+    ) -> tuple[dict[str, str], dict[str, list[str]]]:
+        """For each entity, KNN-look up the closest same-type existing row.
+
+        Returns (remap, merged_canonical) where remap is {new_id:
+        existing_id} for entities that should fold into a pre-existing
+        row, and merged_canonical is {existing_id: [new canonical_names
+        to push as aliases]}.
+        """
+        remap: dict[str, str] = {}
+        merged_canonical: dict[str, list[str]] = {}
+        threshold = self.entity_dedup_distance
+        for ent in entities:
+            emb = embeddings.get(ent.id)
+            if emb is None:
+                continue
+            hits = search_entities_by_embedding(
+                self.store.conn, emb, type_slug=ent.type_slug, top_k=1
+            )
+            if not hits:
+                continue
+            existing_id, distance = hits[0]
+            if existing_id == ent.id:
+                continue  # Idempotent re-ingest of the same entity row.
+            if distance > threshold:
+                continue
+            remap[ent.id] = existing_id
+            merged_canonical.setdefault(existing_id, []).append(
+                ent.canonical_name
+            )
+        return remap, merged_canonical
 
     # ------------------------------------------------------------------
     # DB peeks
@@ -328,6 +428,83 @@ def _safe_language(value: str | None) -> Language:
     if value in _LANGUAGES:
         return value  # type: ignore[return-value]
     return "other"
+
+
+def _entity_embedding_text(entity) -> str:
+    """Stable embed input for an entity row.
+
+    type_slug + canonical_name + description gives the embedder enough
+    signal to canonicalise across surface variants (`"ハル太郎"` vs
+    `"ハルタロウ"`). Aliases are intentionally excluded — they're often
+    noisy surface forms that drag the vector around.
+    """
+    parts: list[str] = [f"{entity.type_slug}: {entity.canonical_name}"]
+    if getattr(entity, "description", None):
+        parts.append(entity.description)
+    return "\n".join(parts)
+
+
+def _apply_entity_remap(
+    norm: NormalizedExtraction,
+    remap: dict[str, str],
+) -> NormalizedExtraction:
+    """Rewrite norm so merged-out entity ids are replaced by merge targets.
+
+    The merge target's row already exists in DB; the merged-out entity
+    should not be written. Relation ids are recomputed from the new
+    (type, src, tgt) triple, and relation_links are remapped to point at
+    those new relation ids so the FK to relations.id still resolves.
+    """
+    if not remap:
+        return norm
+
+    kept_entities = [e for e in norm.entities if e.id not in remap]
+
+    new_entity_links = [
+        DocumentEntityLink(
+            document_id=link.document_id,
+            entity_id=remap.get(link.entity_id, link.entity_id),
+            mention_count=link.mention_count,
+            contexts=list(link.contexts),
+        )
+        for link in norm.entity_links
+    ]
+
+    relation_id_remap: dict[str, str] = {}
+    new_relations: list[Relation] = []
+    for rel in norm.relations:
+        new_src = remap.get(rel.source_entity_id, rel.source_entity_id)
+        new_tgt = remap.get(rel.target_entity_id, rel.target_entity_id)
+        new_id = relation_id_for(rel.type_slug, new_src, new_tgt)
+        relation_id_remap[rel.id] = new_id
+        new_relations.append(
+            Relation(
+                id=new_id,
+                type_slug=rel.type_slug,
+                source_entity_id=new_src,
+                target_entity_id=new_tgt,
+                fields=dict(rel.fields or {}),
+            )
+        )
+
+    new_relation_links = [
+        DocumentRelationLink(
+            document_id=link.document_id,
+            relation_id=relation_id_remap.get(link.relation_id, link.relation_id),
+            contexts=list(link.contexts),
+        )
+        for link in norm.relation_links
+    ]
+
+    return NormalizedExtraction(
+        entities=kept_entities,
+        relations=new_relations,
+        tags=norm.tags,
+        entity_links=new_entity_links,
+        relation_links=new_relation_links,
+        tag_links=norm.tag_links,
+        drops=norm.drops,
+    )
 
 
 def _embedding_text(doc: Document) -> str:

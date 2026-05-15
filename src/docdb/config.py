@@ -41,6 +41,15 @@ class Settings(BaseSettings):
     agent_prompt_max_bytes: int = Field(default=20_000, ge=2_000, le=150_000)
     text2sql_prompt_max_bytes: int = Field(default=30_000, ge=2_000, le=200_000)
 
+    # Cross-document entity canonicalization. When enabled, every entity
+    # produced by the normaliser is embedded and KNN-matched against
+    # entities_vec; matches under ``entity_dedup_distance`` get merged
+    # into the existing row (its canonical_name wins, the new surface
+    # form becomes an alias). 0.35 ≈ cosine_sim 0.83 on unit-normalised
+    # bge-m3 — start conservative, easy to tune.
+    entity_dedup_enabled: bool = True
+    entity_dedup_distance: float = Field(default=0.35, ge=0.0, le=2.0)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

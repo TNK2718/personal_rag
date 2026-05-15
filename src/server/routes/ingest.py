@@ -30,7 +30,12 @@ def ingest_endpoint():
 
     llm = get_llm()
     conn = get_conn()
-    pipeline = IngestionPipeline(store=DocumentStore(conn), llm=llm)
+    pipeline = IngestionPipeline(
+        store=DocumentStore(conn),
+        llm=llm,
+        entity_dedup_enabled=settings.entity_dedup_enabled,
+        entity_dedup_distance=settings.entity_dedup_distance,
+    )
 
     if path.is_file():
         reports = [pipeline.ingest_file(path)]

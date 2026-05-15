@@ -121,7 +121,12 @@ def ingest(ctx: click.Context, path: Path) -> None:
     init_db(settings.db_path)
     llm = ctx.obj["llm_factory"](settings)
     with connection(settings.db_path) as conn:
-        pipeline = IngestionPipeline(store=DocumentStore(conn), llm=llm)
+        pipeline = IngestionPipeline(
+            store=DocumentStore(conn),
+            llm=llm,
+            entity_dedup_enabled=settings.entity_dedup_enabled,
+            entity_dedup_distance=settings.entity_dedup_distance,
+        )
         report = pipeline.ingest_file(path)
     _print_report(report)
     if report.status == "error":
@@ -147,7 +152,12 @@ def ingest_dir(ctx: click.Context, directory: Path, glob_pattern: str) -> None:
     if total == 0:
         return
     with connection(settings.db_path) as conn:
-        pipeline = IngestionPipeline(store=DocumentStore(conn), llm=llm)
+        pipeline = IngestionPipeline(
+            store=DocumentStore(conn),
+            llm=llm,
+            entity_dedup_enabled=settings.entity_dedup_enabled,
+            entity_dedup_distance=settings.entity_dedup_distance,
+        )
         for i, path in enumerate(targets, 1):
             click.echo(f"[{i}/{total}] processing {path} ...", nl=True)
             sys.stdout.flush()
