@@ -210,6 +210,60 @@ def test_ask_empty_question(client):
     assert res.status_code == 400
 
 
+def test_ask_response_propagates_rewritten_question_in_trace(
+    client, seeded_db, fake_llm
+):
+    """The retry path's canonicalised question must reach the JSON
+    response so the Ask UI can render the rewrite callout independently
+    of the (truncated) ``result_preview``."""
+    from docdb.ingestion import DocumentStore
+    from docdb.models import Entity, entity_id_for
+    from docdb.schema.connection import connection
+    from docdb.search.text2sql import GeneratedSQL
+
+    vec = [0.0] * 1024
+    vec[0] = 1.0
+    alice = Entity(
+        id=entity_id_for("person", "Alice Smith"),
+        type_slug="person",
+        canonical_name="Alice Smith",
+        aliases=["Alice S."],
+    )
+    with connection(seeded_db.db_path) as conn:
+        DocumentStore(conn).upsert_entity(alice, embedding=vec)
+
+    question = "Alice S. の件"
+    rewritten = "Alice Smith の件"
+
+    # Override embed so the question maps to alice's vector; alias
+    # candidate then canonicalises the surface form.
+    fake_llm.embed = lambda texts: [
+        vec if t == question else [0.0] * 1024 for t in texts
+    ]
+    fake_llm.extract_responses.extend(
+        [
+            GeneratedSQL(sql="SELECT bogus FROM entities"),  # primary errors
+            GeneratedSQL(sql=f"SELECT id FROM entities WHERE id='{alice.id}'"),
+        ]
+    )
+    fake_llm.chat_responses.extend(
+        [
+            StubChatCompletion.tool(
+                calls=[("c1", "text_to_sql", json.dumps({"question": question}))]
+            ),
+            StubChatCompletion.text("Alice Smith のレコードを返しました"),
+        ]
+    )
+
+    res = client.post("/api/ask", json={"question": question})
+    assert res.status_code == 200
+    body = res.get_json()
+    assert len(body["trace"]) == 1
+    step = body["trace"][0]
+    assert step["tool"] == "text_to_sql"
+    assert step["rewritten_question"] == rewritten
+
+
 def test_ingest_file(client, tmp_path: Path, fake_llm):
     # Pre-script extraction returns the header only; entity / relation writes
     # are intentionally disabled in Stage 2.
