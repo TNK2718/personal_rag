@@ -30,7 +30,9 @@ from docdb.ingestion import (
 )
 from docdb.llm.base import LLMProtocol
 from docdb.llm.client import LLM
+from docdb.llm.prompts import build_agent_system_prompt
 from docdb.schema.connection import connection, init_db
+from docdb.typing.registry import list_entity_types, list_relation_types
 from docdb.search.direct import (
     count_documents,
     list_doc_types,
@@ -231,7 +233,17 @@ def ask(
     llm = ctx.obj["llm_factory"](settings)
     with connection(settings.db_path) as conn:
         toolbox = Toolbox(conn, llm)
-        agent = SearchAgent(toolbox=toolbox, llm=llm, max_iters=max_iters)
+        system_prompt = build_agent_system_prompt(
+            list_entity_types(conn),
+            list_relation_types(conn),
+            max_bytes=settings.agent_prompt_max_bytes,
+        )
+        agent = SearchAgent(
+            toolbox=toolbox,
+            llm=llm,
+            max_iters=max_iters,
+            system_prompt=system_prompt,
+        )
         result = agent.run(question)
 
     if result.error:

@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     )
 
     ollama_base_url: str = "http://localhost:11434/v1"
-    extract_model: str = "qwen3:4b"
-    agent_model: str = "qwen3:4b"
+    extract_model: str = "granite4.1:3b"
+    agent_model: str = "granite4.1:3b"
     embed_model: str = "bge-m3"
     embed_dim: int = 1024
     keep_alive: str = "5m"
@@ -34,6 +34,7 @@ class Settings(BaseSettings):
     # rebuilding the type registry.
     extract_relations: bool = True
     extraction_prompt_max_bytes: int = Field(default=30_000, ge=2_000, le=200_000)
+    agent_prompt_max_bytes: int = Field(default=20_000, ge=2_000, le=150_000)
 
 
 @lru_cache(maxsize=1)

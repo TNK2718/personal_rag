@@ -29,7 +29,7 @@ from docdb.models import Citation, Document, Entity, Relation
 from docdb.search import direct
 from docdb.search.hybrid import hybrid_search
 from docdb.search.sql_guard import UnsafeQueryError, validate_readonly_sql
-from docdb.search.text2sql import ALLOWED_TABLES
+from docdb.search.text2sql import ALLOWED_TABLES, run_text2sql
 from docdb.typing.registry import list_entity_types, list_relation_types
 
 
@@ -257,12 +257,38 @@ class Toolbox:
                 },
             ),
             ToolSpec(
+                name="text_to_sql",
+                description=(
+                    "Translate a natural-language question into a safe read-only "
+                    "SELECT against documents / entities / relations / tags and "
+                    "run it. Prefer this over `execute_readonly_sql` for any "
+                    "cross-table aggregation, count, LIKE search, or schema-aware "
+                    "filter — the underlying prompt is given the full schema, so "
+                    "column names won't be hallucinated. The natural-language "
+                    "question is passed straight through; do not write SQL here."
+                ),
+                parameters={
+                    "type": "object",
+                    "properties": {
+                        "question": {
+                            "type": "string",
+                            "description": "The natural-language question to translate into SQL.",
+                        }
+                    },
+                    "required": ["question"],
+                },
+            ),
+            ToolSpec(
                 name="execute_readonly_sql",
                 description=(
                     "Last-resort escape hatch: execute a hand-crafted SELECT "
-                    "against the documents/entities/relations/tags schema. The "
-                    "SQL is validated by the same guard the rest of the "
-                    "system uses (SELECT-only, allowlisted tables, auto LIMIT)."
+                    "against the schema. Prefer `text_to_sql` unless you have a "
+                    "very specific query you want to run verbatim. Tables: "
+                    "documents(id, title, raw_text, summary, doc_type, ...), "
+                    "entities(id, type_slug, canonical_name, fields JSON), "
+                    "relations(id, type_slug, source_entity_id, target_entity_id). "
+                    "FTS via documents_fts MATCH 'word'. SELECT-only, allowlisted "
+                    "tables, auto LIMIT."
                 ),
                 parameters={
                     "type": "object",
@@ -282,6 +308,7 @@ class Toolbox:
             "search_entities": self._search_entities,
             "get_entity_documents": self._get_entity_documents,
             "search_relations": self._search_relations,
+            "text_to_sql": self._text_to_sql,
             "execute_readonly_sql": self._execute_readonly_sql,
         }
         return specs, handlers
@@ -400,6 +427,21 @@ class Toolbox:
                 top_k=top_k,
             )
         ]
+
+    def _text_to_sql(self, question: str) -> dict:
+        result = run_text2sql(
+            self.conn,
+            question,
+            self.llm,
+            max_limit=self.max_sql_limit,
+            max_rows=self.max_sql_limit,
+        )
+        return {
+            "sql": result.validated_sql or result.sql,
+            "reasoning": result.reasoning,
+            "rows": result.rows,
+            "error": result.error,
+        }
 
     def _execute_readonly_sql(self, sql: str) -> dict:
         try:
