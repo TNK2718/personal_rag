@@ -9,14 +9,34 @@ the three terminating conditions (final answer, max_iters, llm error).
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass, field
 
 import pytest
 
 from docdb.agent.loop import SearchAgent
 from docdb.agent.toolbox import Toolbox
-from docdb.llm.fake import FakeLLM, StubChatCompletion
+from docdb.ingestion.store import DocumentStore
+from docdb.llm.fake import FakeLLM, StubChatCompletion, _hash_to_unit_vector
+from docdb.models import Entity, entity_id_for
+from docdb.search.text2sql import GeneratedSQL
 
 from tests.docdb.fixtures import SAMPLE_DOCS
+
+
+@dataclass
+class _KeyedEmbedLLM(FakeLLM):
+    """FakeLLM with text→vector overrides for deterministic KNN tests."""
+
+    embed_overrides: dict[str, list[float]] = field(default_factory=dict)
+
+    def embed(self, texts):
+        self.calls_embed.append(list(texts))
+        return [
+            self.embed_overrides[t]
+            if t in self.embed_overrides
+            else _hash_to_unit_vector(t, self.embed_dim)
+            for t in texts
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -161,6 +181,64 @@ def test_llm_error_aborts_with_error(populated_db) -> None:
     result = agent.run("?")
     assert not result.succeeded
     assert "ollama unreachable" in result.error
+
+
+def test_agent_trace_carries_rewritten_question_from_text_to_sql(
+    populated_db,
+) -> None:
+    """When ``text_to_sql`` retries via canonicalisation, the rewrite must
+    propagate to the trace entry so the UI can surface it independently
+    of the truncated ``result_preview``."""
+    vec = [0.0] * 1024
+    vec[0] = 1.0
+    alice = Entity(
+        id=entity_id_for("person", "Alice Smith"),
+        type_slug="person",
+        canonical_name="Alice Smith",
+        aliases=["Alice S."],
+    )
+    DocumentStore(populated_db).upsert_entity(alice, embedding=vec)
+
+    question = "Alice S. の件"
+    rewritten = "Alice Smith の件"
+
+    fake = _KeyedEmbedLLM(
+        embed_overrides={question: vec},
+        extract_responses=[
+            # Primary attempt: SQLite errors on bogus column → triggers retry.
+            GeneratedSQL(sql="SELECT bogus FROM entities"),
+            # Retry on the canonicalised question succeeds.
+            GeneratedSQL(sql=f"SELECT id FROM entities WHERE id='{alice.id}'"),
+        ],
+        chat_responses=[
+            StubChatCompletion.tool(
+                [("c1", "text_to_sql", json.dumps({"question": question}))]
+            ),
+            StubChatCompletion.text("Alice Smith に関するレコードを見つけました"),
+        ],
+    )
+    agent = _agent(populated_db, fake)
+
+    result = agent.run(question)
+
+    assert result.succeeded
+    assert [t.tool for t in result.trace] == ["text_to_sql"]
+    assert result.trace[0].rewritten_question == rewritten
+
+
+def test_agent_trace_rewritten_question_is_none_on_happy_path(populated_db) -> None:
+    """Tools that never set ``rewritten_question`` produce ``None`` traces."""
+    fake = FakeLLM(
+        chat_responses=[
+            StubChatCompletion.tool(
+                [("c1", "search_documents", json.dumps({"query": "解約条項"}))]
+            ),
+            StubChatCompletion.text("done"),
+        ]
+    )
+    agent = _agent(populated_db, fake)
+    result = agent.run("?")
+    assert result.trace[0].rewritten_question is None
 
 
 def test_tool_error_is_recorded_but_loop_continues(populated_db) -> None:

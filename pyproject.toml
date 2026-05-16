@@ -62,4 +62,4 @@ where = ["src"]
 # scripts/refresh_uv_exclude_newer.py (pre-commit + CI). The refresh
 # script only moves the date forward, so a manual bump here for an
 # urgent CVE fix will stick until time naturally catches up.
-exclude-newer = "2026-05-08T00:00:00Z"
+exclude-newer = "2026-05-09T00:00:00Z"

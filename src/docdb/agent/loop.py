@@ -46,6 +46,7 @@ class AgentTrace:
     arguments: dict[str, Any]
     result_preview: str = ""
     error: str | None = None
+    rewritten_question: str | None = None
 
     @property
     def succeeded(self) -> bool:
@@ -139,6 +140,12 @@ class SearchAgent:
                 if len(preview) > 500:
                     preview = preview[:500] + "…"
 
+                rewritten = (
+                    inv.result.get("rewritten_question")
+                    if isinstance(inv.result, dict)
+                    else None
+                )
+
                 trace.append(
                     AgentTrace(
                         iteration=iteration,
@@ -146,6 +153,7 @@ class SearchAgent:
                         arguments=inv.arguments,
                         result_preview=preview,
                         error=inv.error,
+                        rewritten_question=rewritten,
                     )
                 )
 

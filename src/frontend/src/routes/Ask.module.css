@@ -146,3 +146,16 @@
   font-size: 12px;
   white-space: pre-wrap;
 }
+
+.traceRewrite {
+  margin: 0 0 var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  background-color: rgba(240, 161, 58, 0.12);
+  color: var(--color-warning);
+  border-radius: var(--radius-md);
+  font-size: 12px;
+}
+
+.traceRewrite code {
+  font-family: var(--font-mono);
+}

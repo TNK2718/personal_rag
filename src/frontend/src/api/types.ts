@@ -145,6 +145,7 @@ export interface AgentTrace {
   arguments: Record<string, unknown>;
   result_preview: string;
   error: string | null;
+  rewritten_question?: string | null;
 }
 
 export interface AskResponse {

@@ -104,6 +104,12 @@ export default function Ask() {
                           step {t.iteration}
                         </span>
                       </div>
+                      {t.rewritten_question && (
+                        <div className={styles.traceRewrite}>
+                          クエリを書き換えて再実行しました:{" "}
+                          <code>{t.rewritten_question}</code>
+                        </div>
+                      )}
                       <pre className={styles.traceArgs}>
                         {JSON.stringify(t.arguments, null, 2)}
                       </pre>
