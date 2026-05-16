@@ -24,7 +24,7 @@ from docdb.typing.registry import (
 
 def test_seed_entity_types_loaded_after_init_db(conn: sqlite3.Connection) -> None:
     slugs = {t.slug for t in list_entity_types(conn)}
-    assert {"person", "org", "place", "task"}.issubset(slugs)
+    assert {"person", "org", "place", "task", "project", "event"}.issubset(slugs)
 
 
 def test_seed_task_has_three_fields(conn: sqlite3.Connection) -> None:
@@ -35,9 +35,50 @@ def test_seed_task_has_three_fields(conn: sqlite3.Connection) -> None:
     assert getattr(statuses, "options", None) == ["pending", "in_progress", "completed", "cancelled"]
 
 
+def test_seed_project_has_expected_fields(conn: sqlite3.Connection) -> None:
+    project = get_entity_type(conn, "project")
+    assert project is not None
+    assert [f.name for f in project.fields] == ["status", "start_date", "end_date"]
+    status = next(f for f in project.fields if f.name == "status")
+    assert getattr(status, "options", None) == ["active", "paused", "completed", "archived"]
+
+
+def test_seed_event_has_datetime_fields(conn: sqlite3.Connection) -> None:
+    event = get_entity_type(conn, "event")
+    assert event is not None
+    assert [f.name for f in event.fields] == ["start_at", "end_at"]
+    assert {f.type for f in event.fields} == {"datetime"}
+
+
 def test_seed_relation_types_loaded(conn: sqlite3.Connection) -> None:
     slugs = {t.slug for t in list_relation_types(conn)}
-    assert {"assigned_to", "mentions"}.issubset(slugs)
+    assert {
+        "assigned_to",
+        "mentions",
+        "belongs_to",
+        "part_of",
+        "reports_to",
+        "located_in",
+        "depends_on",
+        "member_of",
+        "participated_in",
+    }.issubset(slugs)
+
+
+def test_belongs_to_endpoint_constraints(conn: sqlite3.Connection) -> None:
+    rel = get_relation_type(conn, "belongs_to")
+    assert rel is not None
+    assert rel.source_type_slug == "person"
+    assert rel.target_type_slug == "org"
+    assert rel.is_builtin is True
+
+
+def test_located_in_target_is_place(conn: sqlite3.Connection) -> None:
+    """``located_in`` is polymorphic on source but pinned to place on target."""
+    rel = get_relation_type(conn, "located_in")
+    assert rel is not None
+    assert rel.source_type_slug is None
+    assert rel.target_type_slug == "place"
 
 
 class TestUpsertEntityType:

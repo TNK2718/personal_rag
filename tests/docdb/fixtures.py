@@ -11,10 +11,12 @@ from __future__ import annotations
 from docdb.models import (
     Document,
     Entity,
+    Relation,
     Tag,
     content_hash_for,
     document_id_for,
     entity_id_for,
+    relation_id_for,
     tag_id_for,
 )
 
@@ -82,8 +84,11 @@ SAMPLE_DOCS: list[Document] = [
 ]
 
 
-# Property-graph entities — the seed types ``person`` / ``org`` / ``task``
-# are loaded by ``init_db`` from ``seed.sql`` and referenced here by slug.
+# Property-graph entities — built-in types (person / org / place / task /
+# project / event) are loaded by ``init_db`` from ``seed.sql`` and referenced
+# here by slug. Indices 0..2 are kept stable: existing tests reference
+# ``SAMPLE_ENTITIES[0]`` (田中) and ``SAMPLE_ENTITIES[1]`` (プロジェクトA)
+# by position, so new entities are appended.
 SAMPLE_ENTITIES: list[Entity] = [
     Entity(
         id=entity_id_for("person", "田中"),
@@ -102,6 +107,61 @@ SAMPLE_ENTITIES: list[Entity] = [
         canonical_name="設計レビュー実施",
         fields={"status": "pending", "priority": "high"},
     ),
+    Entity(
+        id=entity_id_for("person", "山田花子"),
+        type_slug="person",
+        canonical_name="山田花子",
+        aliases=["山田花子さん", "山田"],
+    ),
+    Entity(
+        id=entity_id_for("org", "株式会社サンプル"),
+        type_slug="org",
+        canonical_name="株式会社サンプル",
+        aliases=["サンプル社"],
+    ),
+    Entity(
+        id=entity_id_for("project", "次世代RAG基盤"),
+        type_slug="project",
+        canonical_name="次世代RAG基盤",
+        fields={"status": "active"},
+    ),
+    Entity(
+        id=entity_id_for("place", "東京本社"),
+        type_slug="place",
+        canonical_name="東京本社",
+    ),
+    Entity(
+        id=entity_id_for("event", "2026年5月定例会"),
+        type_slug="event",
+        canonical_name="2026年5月定例会",
+        fields={"start_at": "2026-05-12T10:00:00"},
+    ),
+]
+
+
+def _rel(type_slug: str, src: Entity, tgt: Entity) -> Relation:
+    return Relation(
+        id=relation_id_for(type_slug, src.id, tgt.id),
+        type_slug=type_slug,
+        source_entity_id=src.id,
+        target_entity_id=tgt.id,
+    )
+
+
+# Property-graph edges exercising the built-in relation types. Used by the
+# ``populated_db`` fixture so that text2sql and agent tests can answer
+# typical property-graph questions like 「山田花子さんの所属は？」.
+SAMPLE_RELATIONS: list[Relation] = [
+    # 山田花子 belongs_to 株式会社サンプル
+    _rel("belongs_to", SAMPLE_ENTITIES[3], SAMPLE_ENTITIES[4]),
+    # 株式会社サンプル located_in 東京本社
+    _rel("located_in", SAMPLE_ENTITIES[4], SAMPLE_ENTITIES[6]),
+    # 山田花子 member_of 次世代RAG基盤
+    _rel("member_of", SAMPLE_ENTITIES[3], SAMPLE_ENTITIES[5]),
+    # 山田花子 participated_in 2026年5月定例会
+    _rel("participated_in", SAMPLE_ENTITIES[3], SAMPLE_ENTITIES[7]),
+    # 設計レビュー実施 assigned_to 田中  (existing entities, exercises assigned_to)
+    _rel("assigned_to", SAMPLE_ENTITIES[2], SAMPLE_ENTITIES[0]),
 ]
 
 

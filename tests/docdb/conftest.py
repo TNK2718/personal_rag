@@ -11,6 +11,7 @@ from docdb.schema.connection import get_connection, init_db
 from tests.docdb.fixtures import (
     SAMPLE_DOCS,
     SAMPLE_ENTITIES,
+    SAMPLE_RELATIONS,
     SAMPLE_TAGS,
 )
 
@@ -51,6 +52,8 @@ def populated_db(db_path: Path, fake_llm: FakeLLM):
         store.upsert_document(doc, embedding=emb)
     for ent in SAMPLE_ENTITIES:
         store.upsert_entity(ent)
+    for rel in SAMPLE_RELATIONS:
+        store.upsert_relation(rel)
     for tag in SAMPLE_TAGS:
         store.upsert_tag(tag)
     # Link the meeting doc to the 田中 entity and the python tag.

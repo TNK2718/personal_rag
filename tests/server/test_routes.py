@@ -6,7 +6,9 @@ from pathlib import Path
 import pytest
 
 from docdb.llm.fake import StubChatCompletion, StubToolCall
-from tests.docdb.fixtures import SAMPLE_DOCS, SAMPLE_ENTITIES
+from collections import Counter
+
+from tests.docdb.fixtures import SAMPLE_DOCS, SAMPLE_ENTITIES, SAMPLE_RELATIONS
 
 
 def test_health(client):
@@ -21,11 +23,10 @@ def test_stats(client):
     body = res.get_json()
     assert body["documents_total"] == len(SAMPLE_DOCS)
     assert body["entities_total"] == len(SAMPLE_ENTITIES)
-    # Stage 2 reports entities_by_type instead of todos_by_status; the
-    # seeded entities span person + org + task.
     type_counts = {row["type_slug"]: row["count"] for row in body["entities_by_type"]}
-    assert type_counts == {"person": 1, "org": 1, "task": 1}
-    assert body["relations_total"] == 0
+    expected_counts = dict(Counter(e.type_slug for e in SAMPLE_ENTITIES))
+    assert type_counts == expected_counts
+    assert body["relations_total"] == len(SAMPLE_RELATIONS)
     doc_type_names = {d["doc_type"] for d in body["doc_types"]}
     assert "memo" in doc_type_names and "meeting" in doc_type_names
 

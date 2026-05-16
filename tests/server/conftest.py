@@ -13,6 +13,7 @@ from server.app import create_app
 from tests.docdb.fixtures import (
     SAMPLE_DOCS,
     SAMPLE_ENTITIES,
+    SAMPLE_RELATIONS,
     SAMPLE_TAGS,
 )
 
@@ -38,6 +39,8 @@ def seeded_db(settings: Settings) -> Settings:
             store.upsert_document(doc, embedding=embedding)
         for ent in SAMPLE_ENTITIES:
             store.upsert_entity(ent)
+        for rel in SAMPLE_RELATIONS:
+            store.upsert_relation(rel)
         for tag in SAMPLE_TAGS:
             store.upsert_tag(tag)
         # Link the project-A meeting to entity "プロジェクトA".
