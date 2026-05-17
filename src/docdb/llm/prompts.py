@@ -240,8 +240,12 @@ TEXT2SQL_SYSTEM = (
     "document_relations / document_relation_mentions のみ。\n"
     "4. 件数が多くなり得るクエリには LIMIT を付ける (既定 50 件以内)。\n"
     "5. 日本語の全文検索は documents_fts MATCH を使う (3 文字以上必須)。\n"
-    "6. 不要な列を SELECT しない。少なくとも documents.id, title を含めると後工程が読みやすい。\n"
-    "7. 出力 JSON は {sql, reasoning} の 2 フィールドのみ。"
+    "6. ドキュメントを返すクエリには documents.id と title を含めると後工程が読みやすい。\n"
+    "   entity を返すクエリには entities.id と canonical_name を含める。\n"
+    "7. **entity 間の関係を辿るクエリは必ず `relations` テーブル経由で JOIN する。**\n"
+    "   `entity_types` や `relation_types` は型カタログなので、ここに JOIN しても\n"
+    "   個別のエンティティ・関係は出てこない。下の SQL 例を参照。\n"
+    "8. 出力 JSON は {sql, reasoning} の 2 フィールドのみ。"
 )
 
 DOCDB_SCHEMA_SUMMARY = """\
@@ -278,6 +282,49 @@ DOCDB_SCHEMA_SUMMARY = """\
 """
 
 
+# Worked examples; gemma4:e2b (and other small models) otherwise invent
+# nonsense JOINs like `entities.type_slug = relation_types.slug`.
+# Each example is a canonical pattern; the LLM is expected to substitute
+# names, type_slugs, and field keys appropriate to the user's question.
+DOCDB_SCHEMA_EXAMPLES = """\
+-- 例1) 人物名から所属組織を引く (entities → relations → entities の 3 テーブル JOIN)
+SELECT org.id, org.canonical_name
+FROM entities AS p
+JOIN relations AS r  ON r.source_entity_id = p.id
+JOIN entities AS org ON org.id = r.target_entity_id
+WHERE p.type_slug = 'person'
+  AND p.canonical_name LIKE '%山田花子%'
+  AND r.type_slug = 'belongs_to'
+LIMIT 10;
+
+-- 例2) 未完了タスクの一覧 (json_extract で type 固有フィールドにアクセス)
+SELECT id, canonical_name,
+       json_extract(fields, '$.status')   AS status,
+       json_extract(fields, '$.due_date') AS due_date
+FROM entities
+WHERE type_slug = 'task'
+  AND json_extract(fields, '$.status') = 'pending'
+ORDER BY json_extract(fields, '$.due_date')
+LIMIT 50;
+
+-- 例3) 「FluxSearch」を本文に含む文書 (FTS は documents_fts MATCH 経由)
+SELECT d.id, d.title, d.doc_type
+FROM documents_fts
+JOIN documents d ON d.rowid = documents_fts.rowid
+WHERE documents_fts MATCH 'FluxSearch'
+LIMIT 20;
+
+-- 例4) 特定の人物が言及されている文書 (entities → document_entities → documents)
+SELECT d.id, d.title
+FROM entities AS e
+JOIN document_entities AS de ON de.entity_id = e.id
+JOIN documents AS d          ON d.id = de.document_id
+WHERE e.type_slug = 'person'
+  AND e.canonical_name LIKE '%山田花子%'
+LIMIT 20;
+"""
+
+
 def build_text2sql_user_prompt(
     question: str,
     *,
@@ -303,6 +350,9 @@ def build_text2sql_user_prompt(
         "",
         "# スキーマ",
         DOCDB_SCHEMA_SUMMARY,
+        "",
+        "# SQL 例 (このパターンに従う)",
+        DOCDB_SCHEMA_EXAMPLES,
     ]
     if entity_types:
         catalog_parts.append(
