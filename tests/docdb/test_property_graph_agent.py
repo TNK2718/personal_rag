@@ -20,20 +20,12 @@ from docdb.agent.toolbox import Toolbox
 from docdb.ingestion.store import DocumentStore
 from docdb.llm.fake import FakeLLM, StubChatCompletion
 from docdb.llm.prompts import (
-    AGENT_PROMPT_MAX_BYTES,
     AGENT_SYSTEM,
     AGENT_SYSTEM_BASE,
     DOCDB_SCHEMA_SUMMARY,
-    build_agent_system_prompt,
 )
 from docdb.models import Entity, entity_id_for
 from docdb.search.text2sql import ALLOWED_TABLES, GeneratedSQL
-from docdb.typing.registry import (
-    EntityTypeDef,
-    RelationTypeDef,
-    list_entity_types,
-    list_relation_types,
-)
 
 
 # ---------------------------------------------------------------------------
@@ -297,67 +289,34 @@ def test_toolbox_specs_match_agent_system_advertised_tools(conn) -> None:
 
 
 # ---------------------------------------------------------------------------
-# build_agent_system_prompt: dynamic type catalogue
+# AGENT_SYSTEM is lean: no live type catalog is injected
 # ---------------------------------------------------------------------------
-class TestBuildAgentSystemPrompt:
-    def test_default_cap_is_20kb(self) -> None:
-        assert AGENT_PROMPT_MAX_BYTES == 20_000
-
-    def test_agent_system_alias_is_back_compat(self) -> None:
-        # External callers import AGENT_SYSTEM directly. It must stay equal to
-        # the base string after the rename.
+# The agent used to receive an auto-built prompt with every registered
+# entity / relation type slug appended. That catalog overflowed
+# granite4.1:3b's coherence budget and triggered mixed-script garble in
+# tool-call arguments. The catalog is now discovered on demand via
+# the `describe_schema` tool; AGENT_SYSTEM is the static base prompt.
+class TestAgentSystemIsLean:
+    def test_agent_system_alias_is_base(self) -> None:
         assert AGENT_SYSTEM == AGENT_SYSTEM_BASE
 
-    def test_empty_registry_returns_base_only(self) -> None:
-        prompt = build_agent_system_prompt([], [])
-        # The base instructions are preserved verbatim.
-        assert AGENT_SYSTEM_BASE in prompt
-        # Catalogue headers only show up when types exist.
-        assert "登録済みの entity 型" not in prompt
-        assert "登録済みの relation 型" not in prompt
+    def test_no_live_type_catalog(self) -> None:
+        # No "登録済みの ... 型" header — that was the catalog injection
+        # point and it should never appear in the static prompt.
+        assert "登録済みの entity 型" not in AGENT_SYSTEM
+        assert "登録済みの relation 型" not in AGENT_SYSTEM
 
-    def test_catalogue_lists_entity_slug_and_label(self, conn: sqlite3.Connection) -> None:
-        entity_types = list_entity_types(conn)
-        prompt = build_agent_system_prompt(entity_types, [])
-        assert "登録済みの entity 型" in prompt
-        for t in entity_types:
-            assert f"`{t.slug}`" in prompt
-            assert t.label in prompt
+    def test_points_at_describe_schema_for_introspection(self) -> None:
+        # The agent must know it can call describe_schema to recover the
+        # information that the catalog used to preload.
+        assert "describe_schema" in AGENT_SYSTEM
 
-    def test_catalogue_omits_field_details(self, conn: sqlite3.Connection) -> None:
-        # The agent prompt is intentionally lean: no fields_schema dump.
-        task = next(t for t in list_entity_types(conn) if t.slug == "task")
-        prompt = build_agent_system_prompt([task], [])
-        # task has 'status' field on the extraction side, but the agent prompt
-        # should not enumerate per-field specs (keeps the prompt small).
-        assert "status (enum" not in prompt
-        assert "due_date (date" not in prompt
-
-    def test_relation_catalogue_shows_endpoints(self, conn: sqlite3.Connection) -> None:
-        entity_types = list_entity_types(conn)
-        relation_types = list_relation_types(conn)
-        if not relation_types:
-            pytest.skip("no relation types seeded in this fixture")
-        prompt = build_agent_system_prompt(entity_types, relation_types)
-        for t in relation_types:
-            assert f"`{t.slug}`" in prompt
-
-    def test_relations_skipped_when_no_entity_types(self) -> None:
-        rel = RelationTypeDef.model_validate(
-            {"slug": "assigned_to", "label": "担当", "fields_schema": []}
-        )
-        prompt = build_agent_system_prompt([], [rel])
-        # Without any entity types the relation catalogue is irrelevant noise.
-        assert "assigned_to" not in prompt
-
-    def test_byte_cap_truncates_rather_than_crashing(self, conn: sqlite3.Connection) -> None:
-        entity_types = list_entity_types(conn)
-        relation_types = list_relation_types(conn)
-        prompt = build_agent_system_prompt(
-            entity_types, relation_types, max_bytes=2_500
-        )
-        assert len(prompt.encode("utf-8")) <= 2_700
-        assert "省略" in prompt
+    def test_prompt_fits_under_2kb(self) -> None:
+        # Empirical ceiling: keeping AGENT_SYSTEM under 2KB keeps the per-turn
+        # prompt+tools payload under ~4KB total, which is inside the
+        # coherence budget that produced clean Japanese tool args in the
+        # 2026-05-16 granite4.1:3b probe (see scripts/ollama_full_prompt_probe.py).
+        assert len(AGENT_SYSTEM.encode("utf-8")) < 2_000
 
 
 # ---------------------------------------------------------------------------

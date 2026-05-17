@@ -24,7 +24,6 @@ from docdb.typing.registry import EntityTypeDef, RelationTypeDef
 
 
 EXTRACTION_PROMPT_MAX_BYTES = 30_000
-AGENT_PROMPT_MAX_BYTES = 20_000
 TEXT2SQL_PROMPT_MAX_BYTES = 30_000
 
 
@@ -302,94 +301,42 @@ def build_text2sql_user_prompt(
 # ---------------------------------------------------------------------------
 # Search agent
 # ---------------------------------------------------------------------------
+# Lean prompt: routing + rules only. Two earlier sources of bloat are gone:
+# (1) inline SQL schema in step 5 — `text_to_sql` injects its own schema,
+#     and `execute_readonly_sql` is rarely needed; (2) the live entity /
+#     relation type catalog that build_agent_system_prompt used to append
+#     — the agent can call `describe_schema` on demand instead. Together
+#     this cut the per-turn prompt+tools payload from ~8.2KB to ~2.7KB,
+#     which keeps granite4.1:3b inside its coherence budget on Japanese
+#     tool-call arguments (the model was previously emitting mixed-script
+#     garbage like `相对ごかのリークティを列表します` under the larger prompt).
 AGENT_SYSTEM_BASE = (
-    "あなたは個人 Markdown メモに対する検索エージェントです。\n"
-    "提供されたツールのみを使って情報を探し、ユーザーの質問に日本語で簡潔に答えます。\n"
+    "あなたは個人 Markdown メモを検索するエージェントです。\n"
+    "提供されたツールのみを使い、ユーザーには日本語で簡潔に答えます。\n"
     "\n"
-    "この個人ノートは property graph として SQLite に正規化されており、ドキュメント・\n"
-    "エンティティ (人物・組織・タスク・場所など、`type_slug` でカテゴリ化) ・リレーションが\n"
-    "テーブルとして引ける。**ほぼ全ての構造化問い合わせは SQL で表現できる**ため、\n"
-    "デフォルトの経路は `text_to_sql` (LLM が schema 込みで SELECT を生成して実行する)。\n"
-    "全文検索や entity の便利関数は、SQL では届きにくい場面の補助として位置づける。\n"
-    "\n"
-    "進め方:\n"
-    "1. **デフォルト: `text_to_sql`**。質問が「件数」「条件指定」「型ベース (タスク・会議など)」\n"
-    "   「JOIN (担当者・所属・親子)」「LIKE」「期間絞り込み」など SQL で表現できるなら、\n"
-    "   まず `text_to_sql` に質問文をそのまま渡す。schema (テーブル定義 + 全 entity/relation\n"
-    "   型の slug とフィールド) は内部で自動付与されるので、事前にスキーマを調べる必要はない。\n"
-    "2. SQL では表現しづらい **自由語句の意味検索** (本文中のフレーズ・概念・言い換え)\n"
-    "   が必要なときだけ `search_documents` を使う (3 文字以上; 既定で FTS+ベクトル融合、\n"
-    "   純粋 FTS にしたいときだけ `hybrid=false`)。本文確認は `get_document`。\n"
-    "3. 既に id を持っているなら `get_document` (本文)、`find_similar`\n"
-    "   (類似ドキュメントの vec KNN) を直接呼ぶ。\n"
-    "4. `text_to_sql` に渡す前にスキーマ (どんな型・フィールド・関係があるか) を\n"
-    "   確かめたいときは `describe_schema` を呼ぶ (引数なしで summary、`kind` で絞り込み、\n"
-    "   `kind`+`slug` で 1 型のフィールド詳細まで掘れる; 通常は下のカタログで十分)。\n"
-    "5. 自分で書きたい SQL があるときだけ `execute_readonly_sql`\n"
-    "   (テーブル: documents(id, title, raw_text, summary, doc_type, …)、\n"
-    "   entities(id, type_slug, canonical_name, fields JSON, …)、relations(id, type_slug,\n"
-    "   source_entity_id, target_entity_id, …)。`body` ではなく `raw_text`)。\n"
+    "使うツールの選び方:\n"
+    "1. デフォルトは `text_to_sql`。質問を日本語のままそのまま渡せば、内部で\n"
+    "   SQL に変換してドキュメント・エンティティ・リレーションを横断検索する。\n"
+    "   件数・条件・JOIN・期間絞り込みなど構造化問い合わせは全部これ。\n"
+    "2. 本文中のフレーズや概念を意味検索したいときだけ `search_documents`。\n"
+    "3. 既に id がわかっているなら `get_document` / `find_similar`。\n"
+    "4. どんな entity 型・relation 型が登録されているか確かめたいときは\n"
+    "   `describe_schema` (引数なし=サマリ、`kind` で絞り、`kind`+`slug` で詳細)。\n"
+    "5. 自分で SELECT を書きたいときだけ `execute_readonly_sql`。\n"
     "\n"
     "ルール:\n"
-    "- ツール結果に書かれていない情報を捏造しない。資料に存在しなければ「分かりません」と答える。\n"
+    "- ツール結果に書かれていない情報を捏造しない。資料に無ければ「分かりません」と答える。\n"
     "- 回答末尾に出典を `[doc:document_id]` の形式で列挙する。\n"
-    "- 不要なツール呼び出しを避ける。十分な情報が揃ったら速やかに最終回答を返す。"
+    "- 不要なツール呼び出しを避け、十分な情報が揃ったら速やかに最終回答を返す。\n"
+    "- ツールに渡す検索語や質問文はユーザーの言語 (日本語) のまま。\n"
+    "  特に `text_to_sql` には質問をそのまま、訳さず・要約せず渡す。\n"
+    "- JSON 文字列の中に日本語を書くときは、生の UTF-8 文字をそのまま入れる。\n"
+    "  `\\uXXXX` のような Unicode エスケープ列は絶対に出力しない。"
 )
 
-# Back-compat: external callers and existing tests import AGENT_SYSTEM directly.
+# Single import surface: ``AGENT_SYSTEM`` is the agent's system prompt.
+# There is no longer an assembler function — the prompt was previously
+# augmented with a live type catalog, but that catalog overflowed
+# granite4.1:3b's coherence budget. The catalog is now discovered on
+# demand via the ``describe_schema`` tool.
 AGENT_SYSTEM = AGENT_SYSTEM_BASE
-
-
-def build_agent_system_prompt(
-    entity_types: list[EntityTypeDef],
-    relation_types: list[RelationTypeDef],
-    *,
-    max_bytes: int = AGENT_PROMPT_MAX_BYTES,
-) -> str:
-    """Assemble the agent system prompt with the live type catalogue appended.
-
-    The agent only needs slug / label / short description to know which
-    ``type_slug`` values to put in ``text_to_sql`` WHERE clauses (and to know
-    a relation's endpoint types when planning a JOIN). Field schemas and
-    extraction hints (used on the extraction side) are deliberately omitted
-    to keep the prompt small at inference time; ``describe_schema`` is the
-    drill-down path when the agent needs full ``fields_schema``.
-
-    Hard-capped at ``max_bytes`` UTF-8 bytes; if the assembled prompt grows
-    past the cap, trailing catalogue entries are dropped (same approach as
-    ``build_extraction_system_prompt``).
-    """
-    parts: list[str] = [AGENT_SYSTEM_BASE, ""]
-
-    if entity_types:
-        parts.append("# 登録済みの entity 型 (slug : label)")
-        for t in entity_types:
-            parts.append(_render_entity_type_lite(t))
-        parts.append("")
-
-    if relation_types and entity_types:
-        parts.append("# 登録済みの relation 型 (slug : label, source → target)")
-        for t in relation_types:
-            parts.append(_render_relation_type_lite(t))
-        parts.append("")
-
-    assembled = "\n".join(parts)
-    if len(assembled.encode("utf-8")) <= max_bytes:
-        return assembled
-
-    return _truncate_to_fit(parts, max_bytes)
-
-
-def _render_entity_type_lite(t: EntityTypeDef) -> str:
-    head = f"- `{t.slug}` : {t.label}"
-    if t.description:
-        head += f" — {t.description}"
-    return head
-
-
-def _render_relation_type_lite(t: RelationTypeDef) -> str:
-    endpoints = f"{t.source_type_slug or 'any'} → {t.target_type_slug or 'any'}"
-    head = f"- `{t.slug}` : {t.label} ({endpoints})"
-    if t.description:
-        head += f" — {t.description}"
-    return head

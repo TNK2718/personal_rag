@@ -7,8 +7,7 @@ from flask import Blueprint, current_app, jsonify, request
 from docdb.agent.loop import SearchAgent
 from docdb.agent.toolbox import Toolbox
 from docdb.config import Settings
-from docdb.llm.prompts import build_agent_system_prompt
-from docdb.typing.registry import list_entity_types, list_relation_types
+from docdb.llm.prompts import AGENT_SYSTEM
 
 from server.context import get_conn, get_llm
 
@@ -39,16 +38,11 @@ def ask():
         query_resolution_top_k=settings.query_resolution_top_k,
         query_resolution_distance=settings.query_resolution_distance,
     )
-    system_prompt = build_agent_system_prompt(
-        list_entity_types(conn),
-        list_relation_types(conn),
-        max_bytes=settings.agent_prompt_max_bytes,
-    )
     agent = SearchAgent(
         toolbox=toolbox,
         llm=llm,
         max_iters=max_iters,
-        system_prompt=system_prompt,
+        system_prompt=AGENT_SYSTEM,
     )
     result = agent.run(question)
 

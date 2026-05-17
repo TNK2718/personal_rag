@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 
-def test_defaults_use_granite4_1_for_both_extract_and_agent() -> None:
-    # Default is granite4.1:3b for both extraction and the agent; a larger
-    # model can be opted into via DOCDB_AGENT_MODEL / DOCDB_EXTRACT_MODEL.
+def test_default_models() -> None:
+    # Both extract and agent default to gemma4:e2b after the granite4.1
+    # tool-call garble investigation; see memory note
+    # project-granite-tool-call-garble.
     from docdb.config import Settings
 
     s = Settings(_env_file=None)
-    assert s.extract_model == "granite4.1:3b"
-    assert s.agent_model == "granite4.1:3b"
+    assert s.extract_model == "gemma4:e2b"
+    assert s.agent_model == "gemma4:e2b"
     assert s.embed_model == "bge-m3"
     assert s.embed_dim == 1024
 

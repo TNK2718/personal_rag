@@ -154,30 +154,24 @@ class Toolbox:
 
     # -- Tool definitions --------------------------------------------------
     def _build(self) -> tuple[list[ToolSpec], dict[str, Handler]]:
+        # Tool descriptions are deliberately one short sentence each.
+        # Routing nuance ("text_to_sql first, search_documents only when
+        # SQL cannot express it") lives in AGENT_SYSTEM, not duplicated
+        # per tool — granite4.1:3b's coherence budget breaks when the
+        # per-turn payload pushes past ~3KB.
         specs: list[ToolSpec] = [
             ToolSpec(
                 name="text_to_sql",
                 description=(
-                    "**Default tool for any structured query.** Translate a "
-                    "natural-language question into a safe read-only SELECT "
-                    "against documents / entities / relations / tags and run "
-                    "it. The schema (every entity/relation type slug and its "
-                    "fields) is injected into the prompt automatically — you "
-                    "do NOT need to look up table or column names first. Try "
-                    "this first for any question involving counts, filters, "
-                    "joins, type-based conditions (tasks/meetings/people/…), "
-                    "date ranges, or LIKE matches. Only fall back to "
-                    "`search_documents` when the question requires free-text "
-                    "semantic matching (paraphrase / concept search) that SQL "
-                    "cannot express. The natural-language question is passed "
-                    "straight through; do NOT write SQL here."
+                    "Default for structured queries. Converts a natural-language"
+                    " question into safe read-only SQL and runs it."
                 ),
                 parameters={
                     "type": "object",
                     "properties": {
                         "question": {
                             "type": "string",
-                            "description": "The natural-language question to translate into SQL.",
+                            "description": "Natural-language question; pass verbatim.",
                         }
                     },
                     "required": ["question"],
@@ -186,13 +180,8 @@ class Toolbox:
             ToolSpec(
                 name="search_documents",
                 description=(
-                    "Free-text semantic / lexical search **fallback** for "
-                    "questions SQL cannot express (paraphrase, concept search, "
-                    "fuzzy body matches). Prefer `text_to_sql` for any "
-                    "structured filter or aggregation. By default fuses FTS5 "
-                    "with vector similarity (RRF). Set `hybrid=false` to skip "
-                    "the embed call and run pure FTS. If the embedder is "
-                    "unavailable, falls back to FTS automatically."
+                    "Free-text semantic search (FTS+vector). Use only when"
+                    " text_to_sql cannot express the query."
                 ),
                 parameters={
                     "type": "object",
@@ -212,7 +201,7 @@ class Toolbox:
             ),
             ToolSpec(
                 name="find_similar",
-                description="Return documents semantically similar to a given document_id.",
+                description="Documents semantically similar to a given document_id.",
                 parameters={
                     "type": "object",
                     "properties": {
@@ -234,14 +223,8 @@ class Toolbox:
             ToolSpec(
                 name="describe_schema",
                 description=(
-                    "Inspect the catalog of entity types, relation types, and "
-                    "doc types. Default returns a compact summary (slug, label, "
-                    "counts; no per-field schema). Pass `kind` to scope to one "
-                    "catalog, and `kind`+`slug` to drill into a single type and "
-                    "get its full fields_schema / endpoints. Call this before "
-                    "search_entities when the user asks about a kind of thing "
-                    "(tasks, people, meetings, ...) so you know which type_slug "
-                    "to filter by."
+                    "Inspect entity/relation/doc-type catalogs. Use kind+slug"
+                    " to drill into one type's fields."
                 ),
                 parameters={
                     "type": "object",
@@ -249,31 +232,16 @@ class Toolbox:
                         "kind": {
                             "type": "string",
                             "enum": ["entities", "relations", "doc_types"],
-                            "description": "Restrict the result to one catalog. Omit for a full summary.",
                         },
-                        "slug": {
-                            "type": "string",
-                            "description": (
-                                "Drill into one type and return its full "
-                                "fields_schema (entities) or endpoints "
-                                "(relations). Requires `kind` to be 'entities' "
-                                "or 'relations'."
-                            ),
-                        },
+                        "slug": {"type": "string"},
                     },
                 },
             ),
             ToolSpec(
                 name="execute_readonly_sql",
                 description=(
-                    "Last-resort escape hatch: execute a hand-crafted SELECT "
-                    "against the schema. Prefer `text_to_sql` unless you have a "
-                    "very specific query you want to run verbatim. Tables: "
-                    "documents(id, title, raw_text, summary, doc_type, ...), "
-                    "entities(id, type_slug, canonical_name, fields JSON), "
-                    "relations(id, type_slug, source_entity_id, target_entity_id). "
-                    "FTS via documents_fts MATCH 'word'. SELECT-only, allowlisted "
-                    "tables, auto LIMIT."
+                    "Run a hand-written SELECT. Prefer text_to_sql; this is"
+                    " the escape hatch."
                 ),
                 parameters={
                     "type": "object",

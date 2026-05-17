@@ -16,8 +16,13 @@ class Settings(BaseSettings):
     )
 
     ollama_base_url: str = "http://localhost:11434/v1"
-    extract_model: str = "granite4.1:3b"
-    agent_model: str = "granite4.1:3b"
+    # Both agent and extract default to gemma4:e2b. granite4.1:3b/8b
+    # garbled Japanese inside tool-call JSON arguments; gemma4:e2b
+    # passes the probe set verbatim (~2B effective). Keeping a single
+    # model loaded for both paths also halves model-swap overhead in
+    # Ollama. See memory note project-granite-tool-call-garble.
+    extract_model: str = "gemma4:e2b"
+    agent_model: str = "gemma4:e2b"
     embed_model: str = "bge-m3"
     embed_dim: int = 1024
     keep_alive: str = "5m"
