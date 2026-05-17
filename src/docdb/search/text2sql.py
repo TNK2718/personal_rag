@@ -60,6 +60,7 @@ ALLOWED_TABLES: set[str] = {
     "document_tags",
     "document_relations",
     "document_relation_mentions",
+    "v_edges",
 }
 
 

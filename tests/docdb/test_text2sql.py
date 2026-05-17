@@ -441,5 +441,6 @@ def test_allowed_tables_default_matches_schema() -> None:
         "document_tags",
         "document_relations",
         "document_relation_mentions",
+        "v_edges",
     }
     assert ALLOWED_TABLES == expected

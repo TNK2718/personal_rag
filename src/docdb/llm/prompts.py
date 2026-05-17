@@ -242,7 +242,8 @@ TEXT2SQL_SYSTEM = (
     "5. 日本語の全文検索は documents_fts MATCH を使う (3 文字以上必須)。\n"
     "6. ドキュメントを返すクエリには documents.id と title を含めると後工程が読みやすい。\n"
     "   entity を返すクエリには entities.id と canonical_name を含める。\n"
-    "7. **entity 間の関係を辿るクエリは必ず `relations` テーブル経由で JOIN する。**\n"
+    "7. **entity 間の関係を辿るクエリは `v_edges` view を使う。** "
+    "`entities → relations → entities` の 3 テーブル JOIN は v_edges 1 本で書ける。\n"
     "   `entity_types` や `relation_types` は型カタログなので、ここに JOIN しても\n"
     "   個別のエンティティ・関係は出てこない。下の SQL 例を参照。\n"
     "8. 出力 JSON は {sql, reasoning} の 2 フィールドのみ。"
@@ -279,6 +280,12 @@ DOCDB_SCHEMA_SUMMARY = """\
 --   note: doc-to-doc edges, distinct from `relations` (entity-graph edges).
 -- document_relation_mentions(document_id, relation_id, contexts JSON)
 --   note: provenance of entity-graph relations.
+-- v_edges (VIEW): graph 探索専用。1 つの edge を src/tgt の名前と型ごと展開済み。
+--   columns: edge_id, edge_type, edge_label, src_id, src_type, src_name,
+--            tgt_id, tgt_type, tgt_name, edge_fields, edge_created_ts
+--   usage: SELECT tgt_name FROM v_edges WHERE edge_type='belongs_to' AND src_name LIKE '%山田%'
+--   重要: v_edges は **既に src/tgt の canonical_name を持つ**。`entities` テーブルに
+--         JOIN し直して名前を引き直す必要はない (`JOIN entities ON ...` を書かない)。
 """
 
 
@@ -287,14 +294,12 @@ DOCDB_SCHEMA_SUMMARY = """\
 # Each example is a canonical pattern; the LLM is expected to substitute
 # names, type_slugs, and field keys appropriate to the user's question.
 DOCDB_SCHEMA_EXAMPLES = """\
--- 例1) 人物名から所属組織を引く (entities → relations → entities の 3 テーブル JOIN)
-SELECT org.id, org.canonical_name
-FROM entities AS p
-JOIN relations AS r  ON r.source_entity_id = p.id
-JOIN entities AS org ON org.id = r.target_entity_id
-WHERE p.type_slug = 'person'
-  AND p.canonical_name LIKE '%山田花子%'
-  AND r.type_slug = 'belongs_to'
+-- 例1) 人物名から所属組織を引く (v_edges 経由 — 3 テーブル JOIN 不要)
+SELECT tgt_id, tgt_name
+FROM v_edges
+WHERE src_type  = 'person'
+  AND src_name LIKE '%山田花子%'
+  AND edge_type = 'belongs_to'
 LIMIT 10;
 
 -- 例2) 未完了タスクの一覧 (json_extract で type 固有フィールドにアクセス)

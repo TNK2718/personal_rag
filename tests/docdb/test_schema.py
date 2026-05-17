@@ -156,6 +156,49 @@ def test_fts_trigger_removes_deleted_documents(conn: sqlite3.Connection) -> None
     assert rows == []
 
 
+def test_v_edges_view_exists(conn: sqlite3.Connection) -> None:
+    rows = conn.execute(
+        "SELECT name, type FROM sqlite_master "
+        "WHERE name = 'v_edges' AND type = 'view'"
+    ).fetchall()
+    assert len(rows) == 1
+
+
+def test_v_edges_returns_endpoints_for_seeded_edge(conn: sqlite3.Connection) -> None:
+    from docdb.ingestion.store import DocumentStore
+    from docdb.models import Entity, Relation, entity_id_for, relation_id_for
+
+    store = DocumentStore(conn)
+    alice = Entity(
+        id=entity_id_for("person", "Alice"),
+        type_slug="person",
+        canonical_name="Alice",
+    )
+    acme = Entity(
+        id=entity_id_for("org", "Acme"),
+        type_slug="org",
+        canonical_name="Acme",
+    )
+    store.upsert_entity(alice)
+    store.upsert_entity(acme)
+    rel = Relation(
+        id=relation_id_for("belongs_to", alice.id, acme.id),
+        type_slug="belongs_to",
+        source_entity_id=alice.id,
+        target_entity_id=acme.id,
+    )
+    store.upsert_relation(rel)
+
+    rows = conn.execute(
+        "SELECT src_name, tgt_name, edge_type, src_type, tgt_type FROM v_edges "
+        "WHERE src_name = 'Alice' AND edge_type = 'belongs_to'"
+    ).fetchall()
+    assert len(rows) == 1
+    assert rows[0]["tgt_name"] == "Acme"
+    assert rows[0]["src_type"] == "person"
+    assert rows[0]["tgt_type"] == "org"
+
+
 def test_vec0_accepts_1024_dim_vector_and_returns_distance(conn: sqlite3.Connection) -> None:
     import struct
 

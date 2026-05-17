@@ -120,6 +120,31 @@ CREATE INDEX IF NOT EXISTS idx_relations_target ON relations(target_entity_id);
 CREATE INDEX IF NOT EXISTS idx_relations_type   ON relations(type_slug);
 
 -- ============================================================
+-- Convenience view for text2sql / LLM-facing graph traversal.
+-- Denormalises an edge with both endpoints' display name and type so
+-- the LLM can express "find X related to Y" with a single FROM clause
+-- instead of the entities → relations → entities 3-table JOIN. Small
+-- models (gemma4:e2b et al.) otherwise mis-JOIN entities against
+-- relation_types because both expose a `type_slug` column.
+-- ============================================================
+CREATE VIEW IF NOT EXISTS v_edges AS
+SELECT r.id              AS edge_id,
+       r.type_slug        AS edge_type,
+       rt.label           AS edge_label,
+       src.id             AS src_id,
+       src.type_slug      AS src_type,
+       src.canonical_name AS src_name,
+       tgt.id             AS tgt_id,
+       tgt.type_slug      AS tgt_type,
+       tgt.canonical_name AS tgt_name,
+       r.fields           AS edge_fields,
+       r.created_ts       AS edge_created_ts
+FROM relations            AS r
+JOIN entities             AS src ON src.id = r.source_entity_id
+JOIN entities             AS tgt ON tgt.id = r.target_entity_id
+LEFT JOIN relation_types  AS rt  ON rt.slug = r.type_slug;
+
+-- ============================================================
 -- Entity search shadow (Python-maintained) + trigram FTS
 -- ``searchable_text`` concatenates canonical_name, aliases, description and
 -- string-typed field values. The store layer rewrites this row on every
