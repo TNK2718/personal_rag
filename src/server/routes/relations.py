@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import sqlite3
 
 from flask import Blueprint, jsonify, request
@@ -16,6 +17,7 @@ from server.context import get_conn
 
 
 bp = Blueprint("relations", __name__, url_prefix="/api/relations")
+edges_bp = Blueprint("edges", __name__, url_prefix="/api/edges")
 
 
 def _client_error(message: str, status: int = 400):
@@ -131,3 +133,81 @@ def delete_relation_route(relation_id: str):
     if not store.delete_relation(relation_id):
         return _client_error("not found", status=404)
     return ("", 204)
+
+
+# ---------------------------------------------------------------------------
+# GET /api/edges — denormalised relation rows for the UI
+# ---------------------------------------------------------------------------
+# Reads directly from the ``v_edges`` view (introduced in Stage 6 A1) so the
+# response carries each endpoint's canonical_name and type_slug. The legacy
+# /api/relations endpoint still returns the raw Relation shape because writes
+# (POST/PATCH/DELETE) operate on that contract; reads are the only thing that
+# benefits from the denormalised shape.
+_EDGE_COLUMNS = (
+    "edge_id, edge_type, edge_label, "
+    "src_id, src_type, src_name, "
+    "tgt_id, tgt_type, tgt_name, "
+    "edge_fields, edge_created_ts"
+)
+
+
+@edges_bp.get("")
+def list_edges():
+    conn = get_conn()
+    type_slug = request.args.get("type_slug") or request.args.get("type") or None
+    src_id = request.args.get("src_id") or request.args.get("source_entity_id") or None
+    tgt_id = request.args.get("tgt_id") or request.args.get("target_entity_id") or None
+    q = (request.args.get("q") or "").strip() or None
+    try:
+        top_k = max(1, min(int(request.args.get("top_k", 100)), 500))
+    except ValueError:
+        return _client_error("invalid top_k")
+
+    where: list[str] = []
+    params: list = []
+    if type_slug:
+        where.append("edge_type = ?")
+        params.append(type_slug)
+    if src_id:
+        where.append("src_id = ?")
+        params.append(src_id)
+    if tgt_id:
+        where.append("tgt_id = ?")
+        params.append(tgt_id)
+    if q:
+        where.append("(src_name LIKE ? OR tgt_name LIKE ?)")
+        like = f"%{q}%"
+        params.extend([like, like])
+
+    sql = f"SELECT {_EDGE_COLUMNS} FROM v_edges"
+    if where:
+        sql += " WHERE " + " AND ".join(where)
+    sql += " ORDER BY edge_created_ts DESC LIMIT ?"
+    params.append(top_k)
+
+    rows = conn.execute(sql, params).fetchall()
+    out = []
+    for r in rows:
+        fields_raw = r["edge_fields"]
+        fields: dict = {}
+        if fields_raw:
+            try:
+                fields = json.loads(fields_raw) or {}
+            except (ValueError, TypeError):
+                fields = {}
+        out.append(
+            {
+                "edge_id": r["edge_id"],
+                "edge_type": r["edge_type"],
+                "edge_label": r["edge_label"],
+                "src_id": r["src_id"],
+                "src_type": r["src_type"],
+                "src_name": r["src_name"],
+                "tgt_id": r["tgt_id"],
+                "tgt_type": r["tgt_type"],
+                "tgt_name": r["tgt_name"],
+                "edge_fields": fields,
+                "edge_created_ts": r["edge_created_ts"],
+            }
+        )
+    return jsonify(out)

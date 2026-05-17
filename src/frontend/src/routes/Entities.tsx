@@ -5,10 +5,10 @@ import { ApiError, api, fetcher } from "../api/client";
 import { useTypes } from "../api/useTypes";
 import type {
   DocumentDetail,
+  EdgeRow,
   EntityRef,
   EntityTypeDef,
   FieldSpec,
-  RelationRef,
 } from "../api/types";
 import PageHeader from "../components/PageHeader";
 import EmptyState from "../components/EmptyState";
@@ -261,12 +261,12 @@ function EntityDetail({
     entity ? `/api/entities/${entity.id}/documents` : null,
     fetcher,
   );
-  const { data: outgoing } = useSWR<RelationRef[]>(
-    entity ? `/api/relations?source_entity_id=${entity.id}` : null,
+  const { data: outgoing } = useSWR<EdgeRow[]>(
+    entity ? `/api/edges?src_id=${entity.id}` : null,
     fetcher,
   );
-  const { data: incoming } = useSWR<RelationRef[]>(
-    entity ? `/api/relations?target_entity_id=${entity.id}` : null,
+  const { data: incoming } = useSWR<EdgeRow[]>(
+    entity ? `/api/edges?tgt_id=${entity.id}` : null,
     fetcher,
   );
 
@@ -334,16 +334,22 @@ function EntityDetail({
       {(outgoing?.length || incoming?.length) ? (
         <div className={styles.relations}>
           <h3 className={styles.docsHeader}>Relations</h3>
-          {outgoing?.map((r) => (
-            <div key={r.id} className={styles.relRow}>
-              <Badge tone="accent">{r.type_slug}</Badge>
-              <span>→ {r.target_entity_id}</span>
+          {outgoing?.map((e) => (
+            <div key={e.edge_id} className={styles.relRow}>
+              <Badge tone="accent">{e.edge_label ?? e.edge_type}</Badge>
+              <span>
+                → {e.tgt_name}{" "}
+                <span className={styles.muted}>({e.tgt_type})</span>
+              </span>
             </div>
           ))}
-          {incoming?.map((r) => (
-            <div key={r.id} className={styles.relRow}>
-              <span>{r.source_entity_id} →</span>
-              <Badge tone="accent">{r.type_slug}</Badge>
+          {incoming?.map((e) => (
+            <div key={e.edge_id} className={styles.relRow}>
+              <span>
+                {e.src_name}{" "}
+                <span className={styles.muted}>({e.src_type})</span> →
+              </span>
+              <Badge tone="accent">{e.edge_label ?? e.edge_type}</Badge>
             </div>
           ))}
         </div>

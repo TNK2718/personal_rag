@@ -179,6 +179,51 @@ def test_create_relation_and_list(client):
     assert listed[0]["type_slug"] == "assigned_to"
 
 
+def test_list_edges_returns_denormalised_rows(client):
+    """/api/edges expands relations into rows with src/tgt canonical names so
+    the frontend can render them without N+1 entity lookups."""
+    res = client.get("/api/edges")
+    assert res.status_code == 200
+    rows = res.get_json()
+    assert len(rows) == len(SAMPLE_RELATIONS)
+    sample = rows[0]
+    # Every row carries both endpoint names and the edge metadata.
+    for key in (
+        "edge_id", "edge_type", "edge_label",
+        "src_id", "src_type", "src_name",
+        "tgt_id", "tgt_type", "tgt_name",
+        "edge_fields", "edge_created_ts",
+    ):
+        assert key in sample, f"missing {key} in /api/edges row"
+    # Names are populated (the whole point of the view).
+    assert all(r["src_name"] and r["tgt_name"] for r in rows)
+
+
+def test_list_edges_filters_by_type_and_endpoint(client):
+    # The seed contains exactly one belongs_to edge: 山田花子 → 株式会社サンプル.
+    res = client.get("/api/edges?type_slug=belongs_to").get_json()
+    assert len(res) == 1
+    assert res[0]["edge_type"] == "belongs_to"
+    assert res[0]["src_name"] == "山田花子"
+    assert res[0]["tgt_name"] == "株式会社サンプル"
+
+    # Same edge retrievable by src_id filter.
+    src_id = res[0]["src_id"]
+    by_src = client.get(f"/api/edges?src_id={src_id}").get_json()
+    assert len(by_src) >= 1
+    assert all(r["src_id"] == src_id for r in by_src)
+
+
+def test_list_edges_substring_search(client):
+    """q matches against src_name OR tgt_name."""
+    res = client.get("/api/edges?q=山田").get_json()
+    assert len(res) >= 1
+    assert all(
+        "山田" in (r["src_name"] or "") or "山田" in (r["tgt_name"] or "")
+        for r in res
+    )
+
+
 def test_ask_endpoint(client, fake_llm):
     # The agent issues a single search_documents tool call, then returns text.
     fake_llm.chat_responses.extend(

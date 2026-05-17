@@ -114,6 +114,22 @@ export interface RelationRef {
   fields: Record<string, unknown>;
 }
 
+// /api/edges — denormalised relations (v_edges view) so src/tgt names are
+// available without a second fetch. Reads only; writes still use RelationRef.
+export interface EdgeRow {
+  edge_id: string;
+  edge_type: string;
+  edge_label: string | null;
+  src_id: string;
+  src_type: string;
+  src_name: string;
+  tgt_id: string;
+  tgt_type: string;
+  tgt_name: string;
+  edge_fields: Record<string, unknown>;
+  edge_created_ts: string | null;
+}
+
 export interface TagRef {
   id: string;
   canonical_name: string;
