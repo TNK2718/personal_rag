@@ -133,11 +133,16 @@ class TestBuildExtractionSystemPrompt:
 
     def test_relation_types_are_only_shown_when_entity_types_exist(self) -> None:
         rel = RelationTypeDef.model_validate(
-            {"slug": "assigned_to", "label": "担当", "fields_schema": []}
+            {"slug": "manages", "label": "管理", "fields_schema": []}
         )
         prompt = build_extraction_system_prompt([], [rel])
-        # No entity types → relations are not useful; the catalogue is skipped.
-        assert "assigned_to" not in prompt
+        # No entity types → the relation-type catalog header is omitted, and
+        # this specific slug is not rendered. (The static JSON-shape example
+        # in EXTRACTION_SYSTEM_BASE legitimately mentions the seeded
+        # `assigned_to` slug as a placeholder, so we pick a different slug
+        # for this assertion.)
+        assert "# 抽出できる relation 型" not in prompt
+        assert "manages" not in prompt
 
     def test_byte_cap_truncates_rather_than_crashes(self, conn: sqlite3.Connection) -> None:
         entity_types = list_entity_types(conn)

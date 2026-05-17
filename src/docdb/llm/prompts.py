@@ -35,7 +35,39 @@ EXTRACTION_SYSTEM_BASE = (
     "3. `summary` は200字以内の日本語サマリ。冗長な前置きや感想は書かない。\n"
     "4. `language` は本文の主要言語を `ja` / `en` / `mixed` / `other` で表す。\n"
     "5. `tags` は3〜8個の短いカテゴリ語 (1〜2語) を小文字英数字または日本語で。\n"
-    "6. 元の文書に存在しない情報を捏造しない。確信が持てないフィールドは空欄/空配列のままにする。"
+    "6. 元の文書に存在しない情報を捏造しない。確信が持てないフィールドは空欄/空配列のままにする。\n"
+    "\n"
+    "# 出力 JSON は必ず次の shape に従う (下の値は仮置きの例。実際の値は本文から抽出する):\n"
+    "{\n"
+    '  "doc_type": "memo",\n'
+    '  "title": "<ドキュメントタイトル>",\n'
+    '  "summary": "<200字以内の日本語サマリ>",\n'
+    '  "language": "ja",\n'
+    '  "tags": ["<タグ1>", "<タグ2>"],\n'
+    '  "entities": [\n'
+    '    {"type": "person", "name": "<人物名>", "aliases": [], "fields": {}},\n'
+    '    {"type": "task",   "name": "<タスク名>", "aliases": [], "fields": {"status": "pending"}}\n'
+    '  ],\n'
+    '  "relations": [\n'
+    '    {"type": "assigned_to",\n'
+    '     "source": {"type": "task",   "name": "<タスク名>"},\n'
+    '     "target": {"type": "person", "name": "<人物名>"},\n'
+    '     "fields": {}}\n'
+    '  ]\n'
+    "}\n"
+    "\n"
+    "形式の注意 (この通りに守らないと無視される):\n"
+    "- 固有名は `name` キーに入れる。`canonical_name` などの別キーは使わない。\n"
+    "- relation の `source` / `target` は **オブジェクト** `{\"type\":..., \"name\":...}` で渡す。\n"
+    "  ID 文字列だけや、人物名だけの文字列を入れない。\n"
+    "- 型固有のフィールド (task の `status` / `due_date` 等) は entity 直下ではなく\n"
+    "  必ず `fields` オブジェクトの中に入れる。\n"
+    "- `type` の値は下に列挙されている entity 型 / relation 型の slug のみ。それ以外は出力しない。\n"
+    "- `tasks` や `events` のような独自の top-level 配列を勝手に追加しない。\n"
+    "- **relation を書く前に、その `source` と `target` の (type, name) ペアが\n"
+    "  上の `entities` 配列の中にも入っているか必ず確認する**。入っていなければ\n"
+    "  先に `entities` 配列にその entity を追加してから relation を書く。\n"
+    "  `entities` 配列に無い endpoint を参照した relation はパイプライン側で破棄される。"
 )
 
 # Kept for backwards-compat with tests that import the symbol directly.
